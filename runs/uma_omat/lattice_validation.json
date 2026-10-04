@@ -1,0 +1,32 @@
+{
+ "model": "uma-s-1p1-omat",
+ "mae_A": 0.2580109544225273,
+ "spearman": -0.7,
+ "rows": [
+  {
+   "metal": "Mn",
+   "measured_A": 10.53,
+   "relaxed_A": 9.982928469577066
+  },
+  {
+   "metal": "Fe",
+   "measured_A": 10.28,
+   "relaxed_A": 9.936507202195846
+  },
+  {
+   "metal": "Co",
+   "measured_A": 10.3,
+   "relaxed_A": 10.10102789053166
+  },
+  {
+   "metal": "Ni",
+   "measured_A": 10.24,
+   "relaxed_A": 10.221557663286315
+  },
+  {
+   "metal": "Cu",
+   "measured_A": 10.11,
+   "relaxed_A": 10.292075997703524
+  }
+ ]
+}

@@ -1,0 +1,279 @@
+
+==============================================================================
+STAGE 1. Composition -> crystal structure
+==============================================================================
+
+A composition is two numbers: x = Na per formula unit, y = vacancy fraction, in
+Na_x M[Fe(CN)6]_(1-y).  They are the same quantities the analysis layer measures,
+so a computed point and an assayed sample compare without a unit conversion.
+
+Charge balance ties them: each vacancy removes 4- of framework charge and expels
+two Na, so on the neutral line x = 2 - 4y.
+
+       y  charge-balanced Na
+   0.000               2.000
+   0.125               1.500
+   0.250               1.000
+   0.375               0.500
+   0.500               0.000   <- Na hits zero; the line ENDS here
+   0.625               0.000   <- past the end: Na cannot go negative, so it clamps
+
+The framework is rock-salt: M and Fe on interpenetrating FCC sublattices bridged
+along <100>.  The conventional cubic cell holds 4 formula units and 8 Na cages
+(= 2 per f.u.).  Getting this wrong is easy and silent -- an early version put one
+M at the origin and one Fe at the body centre, leaving them 9.1 A apart with no
+M-N bond at all, and 1 f.u. per cell instead of 4.
+
+  built Na1.00Mn[Fe(CN)6]0.75: 65 atoms, 4 f.u.
+
+  bond        n  mean (A)  literature    error
+  H-O        24     0.960        0.96   +0.000
+  C-N        36     1.150        1.15   -0.000
+  H-H        12     1.518                     
+  C-Fe       36     1.900        1.90   +0.000
+  Mn-O       12     2.150                     
+  Mn-N       36     2.215        2.20   +0.015
+  C-C        72     2.687                     
+
+  Cyanide is stiff, so Fe-C and C-N are held at literature values and the M-N
+  bond absorbs the Mn->Cu lattice mismatch.  Placing the light atoms at fixed
+  *fractions* of the cell instead stretched C-N to 1.26 A, which no cyanide does.
+
+A vacancy takes its six cyanides with it and leaves six under-coordinated metals,
+which water completes.  Coordination is the check that this was done right:
+  y=0.00:  64 atoms, 0 aqua O, Mn coordination 6-6 (must be 6)
+  y=0.25:  65 atoms, 6 aqua O, Mn coordination 6-6 (must be 6)
+  y=0.50:  66 atoms, 12 aqua O, Mn coordination 6-6 (must be 6)
+
+Finite cells only represent compositions on a 1/n_fu grid.  Silently rounding a
+request is the same class of defect as inventing a measurement, so the builder
+records what it actually made:
+  asked y=0.125 in a 1x1x1 cell (4 f.u.) -> realized y=0.000, error=0.125
+  min_supercell_for(...) picks (2, 2, 2), where every target is exact:
+     y=0.125 -> realized 0.125, error 0.0e+00
+     y=0.375 -> realized 0.375, error 0.0e+00
+
+==============================================================================
+STAGE 2. Structure -> SQS decoration (icet)
+==============================================================================
+
+A composition names an ENSEMBLE of decorations, not a structure.  One random
+placement of vacancies is a single sample and its energy carries configurational
+scatter.  An SQS is the decoration whose cluster correlations best match the
+infinite random alloy, so one relaxation approximates the ensemble average.
+
+The cutoffs decide whether the search has anything to work with.  The sublattice
+spacings are set by the cubic edge a:
+  a = 10.53 A
+  Fe-Na (cross)      a*sqrt(3)/4 = 4.56 A
+  Na-Na (1st)        a/2         = 5.26 A
+  Fe-Fe (1st)        a*sqrt(2)/2 = 7.45 A   <- vacancy-vacancy
+
+   pair cutoff  clusters   includes first Fe-Fe shell?
+          5.00         4   NO
+          7.00         5   NO
+          8.21         7   yes
+          9.00         8   yes
+
+  The original default was 7.0 A -- just below the 7.45 A first Fe-Fe shell.  The
+  vacancy-vacancy interaction, the single most important one for how vacancies
+  arrange, was excluded while the search still reported success.  Cutoffs are now
+  derived from the lattice parameter: default_cutoffs(10.53) = (8.21, 5.79).
+
+  SQS quality, measured against icet's own random-alloy target vector:
+       y  atoms  realized y  realized Na  mismatch
+   0.250    520      0.2500       1.0000    0.0104
+   0.500    528      0.5000       0.0000    0.0000
+
+  0 is a perfect match.  With the wrong cutoffs this metric read 0.25-0.67; the
+  metric itself was also wrong at first, estimating the pair target as the square
+  of the point correlation -- valid for ONE binary sublattice, but these two are
+  coupled, so it flagged good decorations as bad.
+
+  Endpoints are a special case: at y=0 or y=1 nothing can be swapped and icet
+  correctly refuses.  Those compositions have a single decoration, which is the
+  exact answer rather than an approximation, so they are built directly.
+
+==============================================================================
+STAGE 3. Decoration -> energy (MACE-MP)
+==============================================================================
+
+Relaxation is the expensive stage and had two failure modes, both found by
+reading the diagnostics rather than trusting convergence flags.
+
+(a) The CELL.  Internal coordinates converge in ~6 LBFGS steps, but a general
+    cell filter ran 200 steps without converging (max force 1.96 eV/A, 630 s):
+    six cell degrees of freedom conditioned badly for a framework this soft, and
+    five of them are forbidden by cubic symmetry anyway.  The lattice parameter is
+    scanned and fitted instead -- one degree of freedom, better posed, and the
+    curvature (a bulk-modulus proxy) comes free.
+
+(b) The WATER.  Aqua ligands are placed geometrically with no hydrogen bonding,
+    so they carry almost all the initial force.  Without pre-relaxing them against
+    a fixed framework, every vacancy-bearing composition stalled at max force
+    0.6-0.9 eV/A while the vacancy-free endpoint converged in 6 steps.
+
+  y=0.25, 1x1x1, after both fixes:
+     converged=True  maxF=0.0443 eV/A  flags=[]  a=10.100 A  E/f.u.=-116.1204 eV
+
+  Structure checks run after every relaxation.  They too needed a fix: checking
+  every H-O pair flags all hydrated structures, because adjacent waters
+  hydrogen-bond at 2.0-2.3 A -- which is what they are supposed to do.  Only each
+  hydrogen's NEAREST oxygen is its covalent partner.
+     covalent O-H: 0.960-0.960 A over 12 hydrogens -> flags []
+     one H pulled 1.6 A away    -> flags ['covalent O-H in [0.96, 1.27] A outside physical window [0.90, 1.10]: water is dissociating']
+
+  Stored MACE energies (from runs/hull/, not recomputed here).  Note: the flag
+  counts below were written BEFORE the hydrogen-bond fix above, so every one of
+  them is the old false positive (an H...O contact at 1.8-2.3 A, i.e. a hydrogen
+  bond).  Re-running the checker on those structures today clears them.  The
+  energies themselves are unaffected -- the checker never fed back into the
+  relaxation -- but the stale counts are shown as stored rather than quietly
+  rewritten.
+  Mn  model=mace-mp-small  supercell=[1, 1, 1]  wall=1328s
+     y=0.000  E/f.u.=-125.1144 eV  a=10.035 A  converged=True  flags=0
+     y=0.250  E/f.u.=-116.5757 eV  a=9.685 A  converged=True  flags=1
+     y=0.500  E/f.u.=-106.0451 eV  a=9.914 A  converged=True  flags=1
+     y=0.750  E/f.u.= -99.8823 eV  a=9.808 A  converged=True  flags=1
+  Ni  model=mace-mp-small  supercell=[1, 1, 1]  wall=794s
+     y=0.000  E/f.u.=-120.7277 eV  a=10.180 A  converged=True  flags=0
+     y=0.250  E/f.u.=-112.4281 eV  a=9.843 A  converged=True  flags=1
+     y=0.500  E/f.u.=-102.4095 eV  a=10.204 A  converged=False  flags=1
+     y=0.750  E/f.u.= -94.6229 eV  a=10.240 A  converged=True  flags=0
+
+==============================================================================
+STAGE 4. Energies -> convex hull
+==============================================================================
+
+The mixing energy subtracts the straight line between the two endpoint
+compositions:
+
+    E_mix(y) = E(y) - [(1-f) E(y_lo) + f E(y_hi)],   f = (y - y_lo)/(y_hi - y_lo)
+
+Points below that line are stable intermediates; points above it would demix into
+a mixture of hull compositions.  The lower convex hull separates the two, and the
+vertical distance above it is the driving force for demixing.
+
+  lower_hull demo: y-values [0.0, 0.3, -0.2, 0.3, 0.0]
+    -> vertices at x = [0.0, 0.5, 1.0]  (the two points above the line are correctly excluded)
+
+Two guards decide whether the result means anything at all.
+
+GUARD 1 -- is the composition path straight?  E_mix subtracts a line in y, which
+only cancels the chemical potentials if every species count is ALSO linear in y.
+Na = 2 - 4y is linear until it clamps at zero at y = 0.5.  Past that the path
+bends and the subtraction leaves an uncancelled sodium term:
+  (0.0, 0.125, 0.25, 0.375, 0.5)     -> OK
+  (0.0, 0.25, 0.5, 0.75, 1.0)        -> composition path is not linear: at y=0.500 the sodium content is...
+  Unguarded, the bent path reported a +2.2 eV/f.u. 'miscibility gap' that was
+  pure sodium bookkeeping.
+
+GUARD 2 -- is there more than one interior point?  Three compositions give the
+hull a single degree of freedom, so its shape carries no information.
+
+A related trap, worth stating because it looks like it should matter and does
+not: a vacancy brings 6 waters, so n_H2O = 6y varies along the axis.  But 6y is
+LINEAR in y, and E_mix subtracts a line in y -- so a water chemical potential
+cancels identically, for any number of points:
+  largest feature without water reference: +25.000000 meV
+  largest feature with    water reference: +25.000000 meV
+  identical: True
+  This correction cannot rescue a -1 eV feature, contrary to an initial claim.  The
+  grand potential is still recorded because it is the physically correct object,
+  but the large features are a force-field problem, not a bookkeeping one.
+
+  The real hull, on the stored MACE energies:
+
+  Na/vacancy pseudo-binary hull -- Mn analogue
+    force field      : mace-mp-small
+    supercell        : 1x1x1
+    water reference  : -14.0515 eV/H2O (cancels: n_H2O is linear in y)
+    temperature      : 25 C (kT ln2 = 17.8 meV/f.u.)
+    largest feature  : -995.9 meV/f.u. (ordering)
+  
+    !! PATH: only one interior composition: the hull has a single degree of freedom, so no composition dependence can be resolved.  Add points -- at least two interior vacancy fractions -- before reading a mixing tendency from this series
+  
+    !! 2 composition(s) tripped a structure check (model likely extrapolating)
+    y      Na/f.u.  E_mix (meV)  above hull (meV)  on hull  a (A)
+    0.000  2.00            +0.0              0.0      yes  10.035
+    0.250  1.00          -995.9              0.0      yes  9.685
+    0.500  0.00            +0.0              0.0      yes  9.914
+  
+    The composition path or sampling is unsound (see PATH above), so these mixing energies are not interpretable regardless of their size.  Fix the path before comparing against any energy scale.
+    Configurational spread not measured (n_config_samples=0): hull features smaller than that unknown scatter are not resolved.
+
+  Na/vacancy pseudo-binary hull -- Ni analogue
+    force field      : mace-mp-small
+    supercell        : 1x1x1
+    water reference  : -14.0515 eV/H2O (cancels: n_H2O is linear in y)
+    temperature      : 25 C (kT ln2 = 17.8 meV/f.u.)
+    largest feature  : -859.5 meV/f.u. (ordering)
+  
+    !! PATH: only one interior composition: the hull has a single degree of freedom, so no composition dependence can be resolved.  Add points -- at least two interior vacancy fractions -- before reading a mixing tendency from this series
+  
+    !! 1 composition(s) did not converge; their energies are not usable
+    !! 2 composition(s) tripped a structure check (model likely extrapolating)
+    y      Na/f.u.  E_mix (meV)  above hull (meV)  on hull  a (A)
+    0.000  2.00            +0.0              0.0      yes  10.180
+    0.250  1.00          -859.5              0.0      yes  9.843
+    0.500  0.00            +0.0              0.0      yes  10.204
+  
+    The composition path or sampling is unsound (see PATH above), so these mixing energies are not interpretable regardless of their size.  Fix the path before comparing against any energy scale.
+    Configurational spread not measured (n_config_samples=0): hull features smaller than that unknown scatter are not resolved.
+
+==============================================================================
+STAGE 5. Validating the force field before believing any of it
+==============================================================================
+
+The hull above is machinery working correctly on numbers that are not
+trustworthy.  Two independent checks say so.
+
+CHECK 1 -- the lattice trend across metals, against the measured constants in the
+schema.  This is the only fully independent validation available, because
+composition-resolved cell edges are measurable while mixing energies are not.
+
+    mace-mp-small   MAE 0.254 A   rank correlation -0.70
+    mace-mp-medium  MAE 0.236 A   rank correlation +0.10
+
+A negative rank correlation means the model orders the series BACKWARDS.  Reproduce
+with:  python -m pba_autoworkflow.thermo validate
+
+CHECK 2 -- the magnitude.  Vacancy interactions in a framework roughly half empty
+by volume are tens of meV per formula unit.  The features above are ~900 meV, some
+fifty times the thermal scale, so the module refuses to present them as a
+discovery (IMPLAUSIBLE_FEATURE_EV = 0.20).
+
+Conclusion: fine-tune on DFT for these compositions before acting on a hull.  The
+foundation model has never seen this chemistry -- a molecular framework, half
+empty, strong-field cyanide ligands, open-shell 3d metals, hydrogen-bonded water.
+
+
+==============================================================================
+STAGE 6. How this enters the campaign (and how it can be overruled)
+==============================================================================
+
+One door only: HullPrior, scoring recipes BEFORE they run.  It never writes a
+descriptor, never sets an objective, and nothing it returns is stored as an
+experimental outcome -- a force-field artefact becoming a measurement is the same
+failure as the Fe/carbon bug.
+
+  weight=0.15 (advisory by default)
+       y stability score   penalty
+   0.000           1.000    0.0000
+   0.125           0.755    0.0368
+   0.250           0.687    0.0469
+   0.375           0.755    0.0368
+   0.500           1.000    0.0000
+
+  a metal with no computed hull returns 0.5 -- explicitly uninformative, not a default that quietly favours or disfavours it
+
+  And the prior can be falsified.  Feeding it measurements that get BETTER exactly
+  where it predicts less stable:
+     n=5  correlation=-1.000
+     verdict: prior anti-correlates with measurement: the force field is misleading for this chemistry -- lower weight or drop it
+
+  That is the method to watch given the validation results in stage 5.
+
+==============================================================================
+End of walkthrough.
+==============================================================================

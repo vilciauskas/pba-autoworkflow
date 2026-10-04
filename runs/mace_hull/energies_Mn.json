@@ -1,0 +1,83 @@
+{
+ "metal": "Mn",
+ "model": "mace-mp-small",
+ "supercell": [
+  1,
+  1,
+  1
+ ],
+ "fmax": 0.06,
+ "wall_time_s": 1327.793944120407,
+ "rows": [
+  {
+   "metal": "Mn",
+   "vacancy_fraction": 0.0,
+   "na_per_fu": 2.0,
+   "energy_per_fu_eV": -125.1143862736577,
+   "lattice_a_A": 10.034872658120738,
+   "converged": true,
+   "max_force_eV_A": 0.021277221893686304,
+   "n_steps": 0,
+   "n_atoms": 64,
+   "warnings": [],
+   "config_std_eV": null,
+   "formula": "Na2.00Mn[Fe(CN)6]1.00",
+   "sqs_method": "ordered-endpoint",
+   "wall_time_s": 53.2654333114624
+  },
+  {
+   "metal": "Mn",
+   "vacancy_fraction": 0.25,
+   "na_per_fu": 1.0,
+   "energy_per_fu_eV": -116.57565538616645,
+   "lattice_a_A": 9.684870626523978,
+   "converged": true,
+   "max_force_eV_A": 0.04376667115670829,
+   "n_steps": 0,
+   "n_atoms": 65,
+   "warnings": [
+    "H-O in [0.97, 2.22] A outside physical window [0.90, 1.10]"
+   ],
+   "config_std_eV": null,
+   "formula": "Na1.00Mn[Fe(CN)6]0.75",
+   "sqs_method": "sqs",
+   "wall_time_s": 1318.8500018119812
+  },
+  {
+   "metal": "Mn",
+   "vacancy_fraction": 0.5,
+   "na_per_fu": 0.0,
+   "energy_per_fu_eV": -106.0450509181676,
+   "lattice_a_A": 9.914193817947584,
+   "converged": true,
+   "max_force_eV_A": 0.052545991618450305,
+   "n_steps": 0,
+   "n_atoms": 66,
+   "warnings": [
+    "H-O in [0.98, 2.06] A outside physical window [0.90, 1.10]"
+   ],
+   "config_std_eV": null,
+   "formula": "Na0.00Mn[Fe(CN)6]0.50",
+   "sqs_method": "sqs",
+   "wall_time_s": 515.658627986908
+  },
+  {
+   "metal": "Mn",
+   "vacancy_fraction": 0.75,
+   "na_per_fu": 0.0,
+   "energy_per_fu_eV": -99.88233813403367,
+   "lattice_a_A": 9.807812393777626,
+   "converged": true,
+   "max_force_eV_A": 0.05948640704571817,
+   "n_steps": 17,
+   "n_atoms": 71,
+   "warnings": [
+    "H-O in [0.98, 2.26] A outside physical window [0.90, 1.10]"
+   ],
+   "config_std_eV": null,
+   "formula": "Na0.00Mn[Fe(CN)6]0.25",
+   "sqs_method": "sqs",
+   "wall_time_s": 684.5391340255737
+  }
+ ]
+}

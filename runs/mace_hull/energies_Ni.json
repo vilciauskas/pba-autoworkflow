@@ -1,0 +1,81 @@
+{
+ "metal": "Ni",
+ "model": "mace-mp-small",
+ "supercell": [
+  1,
+  1,
+  1
+ ],
+ "fmax": 0.06,
+ "wall_time_s": 794.4922428131104,
+ "rows": [
+  {
+   "metal": "Ni",
+   "vacancy_fraction": 0.0,
+   "na_per_fu": 2.0,
+   "energy_per_fu_eV": -120.72771015263878,
+   "lattice_a_A": 10.180498062188148,
+   "converged": true,
+   "max_force_eV_A": 0.049260318010354354,
+   "n_steps": 0,
+   "n_atoms": 64,
+   "warnings": [],
+   "config_std_eV": null,
+   "formula": "Na2.00Ni[Fe(CN)6]1.00",
+   "sqs_method": "ordered-endpoint",
+   "wall_time_s": 43.230589389801025
+  },
+  {
+   "metal": "Ni",
+   "vacancy_fraction": 0.25,
+   "na_per_fu": 1.0,
+   "energy_per_fu_eV": -112.42807496414437,
+   "lattice_a_A": 9.842728462369537,
+   "converged": true,
+   "max_force_eV_A": 0.042399666415364023,
+   "n_steps": 0,
+   "n_atoms": 65,
+   "warnings": [
+    "H-O in [0.97, 1.76] A outside physical window [0.90, 1.10]"
+   ],
+   "config_std_eV": null,
+   "formula": "Na1.00Ni[Fe(CN)6]0.75",
+   "sqs_method": "sqs",
+   "wall_time_s": 693.5275304317474
+  },
+  {
+   "metal": "Ni",
+   "vacancy_fraction": 0.5,
+   "na_per_fu": 0.0,
+   "energy_per_fu_eV": -102.40947186462202,
+   "lattice_a_A": 10.204100790120513,
+   "converged": false,
+   "max_force_eV_A": 0.19122432102558568,
+   "n_steps": 120,
+   "n_atoms": 66,
+   "warnings": [
+    "H-O in [0.97, 2.13] A outside physical window [0.90, 1.10]"
+   ],
+   "config_std_eV": null,
+   "formula": "Na0.00Ni[Fe(CN)6]0.50",
+   "sqs_method": "sqs",
+   "wall_time_s": 790.4082796573639
+  },
+  {
+   "metal": "Ni",
+   "vacancy_fraction": 0.75,
+   "na_per_fu": 0.0,
+   "energy_per_fu_eV": -94.62286949757757,
+   "lattice_a_A": 10.240260481759274,
+   "converged": true,
+   "max_force_eV_A": 0.04688453524036884,
+   "n_steps": 0,
+   "n_atoms": 71,
+   "warnings": [],
+   "config_std_eV": null,
+   "formula": "Na0.00Ni[Fe(CN)6]0.25",
+   "sqs_method": "sqs",
+   "wall_time_s": 139.94057440757751
+  }
+ ]
+}

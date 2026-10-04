@@ -1,0 +1,20 @@
+cff-version: 1.2.0
+message: >-
+  If you use this software, please cite it as below, and cite the methods and
+  third-party software you used from REFERENCES.md.
+type: software
+title: "PBA Autonomous Workflow: closed-loop orchestration for Prussian blue analogue synthesis"
+version: 0.1.0
+license: GPL-3.0-or-later
+# TODO before publishing: replace the author entry and add the repository URL.
+authors:
+  - family-names: "FAMILY-NAME"
+    given-names: "GIVEN-NAMES"
+    # orcid: "https://orcid.org/0000-0000-0000-0000"
+# repository-code: "https://github.com/<account>/pba-autoworkflow"
+keywords:
+  - self-driving laboratory
+  - Prussian blue analogue
+  - Bayesian optimisation
+  - machine-learned interatomic potentials
+  - density functional theory

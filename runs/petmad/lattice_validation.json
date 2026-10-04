@@ -1,0 +1,32 @@
+{
+ "model": "pet-mad-latest",
+ "mae_A": 0.45785795308843263,
+ "spearman": -0.7,
+ "rows": [
+  {
+   "metal": "Mn",
+   "measured_A": 10.53,
+   "relaxed_A": 9.76504586761636
+  },
+  {
+   "metal": "Fe",
+   "measured_A": 10.28,
+   "relaxed_A": 9.746408403515822
+  },
+  {
+   "metal": "Co",
+   "measured_A": 10.3,
+   "relaxed_A": 9.716402613464464
+  },
+  {
+   "metal": "Ni",
+   "measured_A": 10.24,
+   "relaxed_A": 9.88410737088412
+  },
+  {
+   "metal": "Cu",
+   "measured_A": 10.11,
+   "relaxed_A": 10.05874597907707
+  }
+ ]
+}

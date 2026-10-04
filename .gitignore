@@ -1,0 +1,31 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+build/
+dist/
+.venv/
+.pytest_cache/
+
+# Campaign outputs (reference results under runs/ ARE tracked; new runs are not)
+runs/demo/
+runs/*/campaign.db
+runs/**/traces/
+*.db
+
+# DFT scratch
+runs/dft/scf_*.txt
+runs/dft/*.txt
+*.gpw
+setups/
+gpaw-setups-*/
+
+# Large or licence-gated binaries: never commit
+*.whl
+*.pt
+*.model
+*.tar.gz
+
+# Secrets
+.env
+*token*

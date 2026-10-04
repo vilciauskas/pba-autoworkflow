@@ -1,0 +1,111 @@
+{
+  "campaign_id": "demo-01",
+  "resumed": false,
+  "n_experiments": 56,
+  "status_counts": {
+    "complete": 53,
+    "failed": 2,
+    "quarantined": 1
+  },
+  "n_iterations": 6,
+  "hypervolume": 0.9505180944847834,
+  "hv_trajectory": [
+    0.7429939510746326,
+    0.7548789719049219,
+    0.830530648141112,
+    0.926586346756403,
+    0.9504592353046408,
+    0.9505180944847834
+  ],
+  "pareto_size": 3,
+  "best": {
+    "experiment_id": "demo-01-b03-e01",
+    "recipe": {
+      "metal": "Cu",
+      "c_metal_M": 0.051950786991101,
+      "c_hcf_M": 0.040303972470558544,
+      "c_nacl_M": 3.959386687530926,
+      "c_citrate_M": 0.2638405828884292,
+      "ph": 5.0078104146723685,
+      "temperature_C": 56.130982849656135,
+      "addition_rate_mL_min": 0.09862649827279789,
+      "aging_time_h": 16.415148595983382,
+      "stir_rate_rpm": 220.7027272122273,
+      "volume_A_mL": 10.0,
+      "volume_B_mL": 10.0
+    },
+    "objectives": {
+      "na_inventory": 0.9507582835191015,
+      "framework_integrity": 0.938561787488846
+    },
+    "scalar": 0.5165138955196217,
+    "formula": "Na1.90Cu[Fe(CN)6]0.94\u00b71.0H2O",
+    "capacity_mAh_g": 101.54688295269261,
+    "domain_size_nm": 30.39831811331645,
+    "isolated_yield": 0.46620161436813434
+  },
+  "station_report": [
+    {
+      "station": "reactor",
+      "capacity": 4,
+      "n_acquisitions": 55,
+      "total_busy_s": 646.3737,
+      "occupancy": 0.4358,
+      "mean_wait_s": 0.0,
+      "max_wait_s": 0.0,
+      "max_concurrent": 4
+    },
+    {
+      "station": "workup",
+      "capacity": 2,
+      "n_acquisitions": 55,
+      "total_busy_s": 61.4642,
+      "occupancy": 0.0829,
+      "mean_wait_s": 0.004,
+      "max_wait_s": 0.199,
+      "max_concurrent": 2
+    },
+    {
+      "station": "liquid_handler",
+      "capacity": 1,
+      "n_acquisitions": 110,
+      "total_busy_s": 56.9382,
+      "occupancy": 0.1536,
+      "mean_wait_s": 0.463,
+      "max_wait_s": 6.573,
+      "max_concurrent": 1
+    },
+    {
+      "station": "diffractometer",
+      "capacity": 1,
+      "n_acquisitions": 54,
+      "total_busy_s": 35.9258,
+      "occupancy": 0.0969,
+      "mean_wait_s": 0.199,
+      "max_wait_s": 2.612,
+      "max_concurrent": 1
+    },
+    {
+      "station": "elemental",
+      "capacity": 1,
+      "n_acquisitions": 54,
+      "total_busy_s": 15.5284,
+      "occupancy": 0.0419,
+      "mean_wait_s": 0.002,
+      "max_wait_s": 0.119,
+      "max_concurrent": 1
+    },
+    {
+      "station": "spectrophotometer",
+      "capacity": 1,
+      "n_acquisitions": 54,
+      "total_busy_s": 1.0985,
+      "occupancy": 0.003,
+      "mean_wait_s": 0.0,
+      "max_wait_s": 0.0,
+      "max_concurrent": 1
+    }
+  ],
+  "bottleneck": "reactor",
+  "stop_reason": null
+}

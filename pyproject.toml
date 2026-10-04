@@ -1,0 +1,46 @@
+[build-system]
+requires = ["setuptools>=77"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "pba-autoworkflow"
+version = "0.1.0"
+description = "Closed-loop orchestration for autonomous Prussian-blue-analogue synthesis"
+readme = "README.md"
+license = "GPL-3.0-or-later"
+license-files = ["LICENSE"]
+requires-python = ">=3.11"
+keywords = ["self-driving laboratory", "Prussian blue analogue", "Bayesian optimisation",
+            "interatomic potentials", "DFT"]
+classifiers = [
+    "Programming Language :: Python :: 3",
+    "Intended Audience :: Science/Research",
+    "Topic :: Scientific/Engineering :: Chemistry",
+]
+dependencies = [
+    "numpy>=1.26",
+    "scipy>=1.11",
+    "pandas>=2.0",
+    "matplotlib>=3.8",
+    "pydantic>=2.5",
+]
+
+[project.optional-dependencies]
+test = ["pytest>=8.0", "pytest-asyncio>=0.23"]
+# Thermodynamics module (structures, hulls, advisor).  icet is only needed for SQS.
+thermo = ["ase>=3.23", "icet>=3.0"]
+# Force-field backends.  MACE pins e3nn==0.4.4 and cannot share an environment
+# with UMA / PET-MAD: install ONE of these per environment.
+uma = ["ase>=3.23", "fairchem-core"]
+petmad = ["ase>=3.23", "pet-mad"]
+mace = ["ase>=3.23", "mace-torch"]
+
+[project.scripts]
+pba-autoworkflow = "pba_autoworkflow.cli:main"
+
+[tool.setuptools.packages.find]
+include = ["pba_autoworkflow*"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+filterwarnings = ["error::RuntimeWarning"]

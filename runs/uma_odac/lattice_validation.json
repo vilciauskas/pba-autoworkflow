@@ -1,0 +1,32 @@
+{
+ "model": "uma-s-1p1-odac",
+ "mae_A": 0.48524206161289846,
+ "spearman": -0.7,
+ "rows": [
+  {
+   "metal": "Mn",
+   "measured_A": 10.53,
+   "relaxed_A": 9.701374408244165
+  },
+  {
+   "metal": "Fe",
+   "measured_A": 10.28,
+   "relaxed_A": 9.696688173898604
+  },
+  {
+   "metal": "Co",
+   "measured_A": 10.3,
+   "relaxed_A": 9.71225627427626
+  },
+  {
+   "metal": "Ni",
+   "measured_A": 10.24,
+   "relaxed_A": 9.913962423866128
+  },
+  {
+   "metal": "Cu",
+   "measured_A": 10.11,
+   "relaxed_A": 10.00950841165035
+  }
+ ]
+}

@@ -1,0 +1,220 @@
+{
+ "Mn_y0.000": {
+  "metal": "Mn",
+  "vacancy_fraction": 0.0,
+  "n_atoms": 64,
+  "a0_built_A": 10.53,
+  "ecut_eV": 340.0,
+  "points": [
+   {
+    "a_A": 9.9,
+    "energy_eV": -385.8634863082876,
+    "total_moment_muB": 19.62920586378401,
+    "converged": true,
+    "error": "",
+    "wall_s": 410.0392322540283
+   },
+   {
+    "a_A": 10.15,
+    "energy_eV": -397.2838404742151,
+    "total_moment_muB": 19.90420278320169,
+    "converged": true,
+    "error": "",
+    "wall_s": 392.9838447570801
+   },
+   {
+    "a_A": 10.4,
+    "energy_eV": -405.69424384723607,
+    "total_moment_muB": 19.987710840269727,
+    "converged": true,
+    "error": "",
+    "wall_s": 403.27448987960815
+   },
+   {
+    "a_A": 10.65,
+    "energy_eV": -408.1334094909383,
+    "total_moment_muB": 19.998810086603275,
+    "converged": true,
+    "error": "",
+    "wall_s": 389.0515422821045
+   },
+   {
+    "a_A": 10.9,
+    "energy_eV": -409.077935888679,
+    "total_moment_muB": 20.000050019468492,
+    "converged": true,
+    "error": "",
+    "wall_s": 425.8765344619751
+   },
+   {
+    "a_A": 11.15,
+    "energy_eV": -408.8713981165745,
+    "total_moment_muB": 20.0001196492933,
+    "converged": true,
+    "error": "",
+    "wall_s": 406.9467465877533
+   },
+   {
+    "a_A": 11.4,
+    "energy_eV": -402.64900958549964,
+    "total_moment_muB": 20.00008371665945,
+    "converged": true,
+    "error": "",
+    "wall_s": 424.78674149513245
+   },
+   {
+    "a_A": 11.65,
+    "energy_eV": -396.92860068125265,
+    "total_moment_muB": 19.99984002481784,
+    "converged": true,
+    "error": "",
+    "wall_s": 359.78447794914246
+   }
+  ]
+ },
+ "Mn_y0.250": {
+  "metal": "Mn",
+  "vacancy_fraction": 0.25,
+  "n_atoms": 65,
+  "a0_built_A": 10.53,
+  "ecut_eV": 340.0,
+  "points": [
+   {
+    "a_A": 9.65,
+    "energy_eV": -337.49813689439577,
+    "total_moment_muB": 9.124246791174093,
+    "converged": true,
+    "error": "",
+    "wall_s": 870.6086885929108
+   },
+   {
+    "a_A": 9.95,
+    "energy_eV": -350.50837737202266,
+    "total_moment_muB": 17.994470460391675,
+    "converged": true,
+    "error": "",
+    "wall_s": 363.736013174057
+   },
+   {
+    "a_A": 10.25,
+    "energy_eV": -364.7149537584262,
+    "total_moment_muB": 18.133395781611203,
+    "converged": true,
+    "error": "",
+    "wall_s": 398.8496923446655
+   },
+   {
+    "a_A": 10.55,
+    "energy_eV": -370.1237164807926,
+    "total_moment_muB": 19.019784256376127,
+    "converged": true,
+    "error": "",
+    "wall_s": 432.531534910202
+   },
+   {
+    "a_A": 10.85,
+    "energy_eV": -370.68730734529703,
+    "total_moment_muB": 19.759447936304618,
+    "converged": true,
+    "error": "",
+    "wall_s": 460.05911898612976
+   },
+   {
+    "a_A": 11.15,
+    "energy_eV": -368.3684554043852,
+    "total_moment_muB": 20.21125069927534,
+    "converged": true,
+    "error": "",
+    "wall_s": 443.45230412483215
+   },
+   {
+    "a_A": 11.45,
+    "energy_eV": -361.88142100212633,
+    "total_moment_muB": 20.423083188988237,
+    "converged": true,
+    "error": "",
+    "wall_s": 465.05418395996094
+   },
+   {
+    "a_A": 11.75,
+    "energy_eV": -354.1945544787844,
+    "total_moment_muB": 20.55215489835983,
+    "converged": true,
+    "error": "",
+    "wall_s": 451.60841155052185
+   }
+  ]
+ },
+ "_summary": {
+  "a_min_y0_A": 10.889630993892357,
+  "a_min_y25_A": 10.859222491686042,
+  "delta_a_dft_A": -0.03040850220631519,
+  "delta_a_mace_relaxed_A": -0.35,
+  "delta_a_uma_relaxed_A": 0.06
+ },
+ "Mn_y0.500": {
+  "metal": "Mn",
+  "vacancy_fraction": 0.5,
+  "n_atoms": 66,
+  "a0_built_A": 10.53,
+  "ecut_eV": 340.0,
+  "points": [
+   {
+    "a_A": 9.95,
+    "energy_eV": -315.89620547284625,
+    "total_moment_muB": 17.698600113872207,
+    "converged": true,
+    "error": "",
+    "wall_s": 340.693838596344
+   },
+   {
+    "a_A": 10.25,
+    "energy_eV": -328.80422094111424,
+    "total_moment_muB": 18.561319843194298,
+    "converged": true,
+    "error": "",
+    "wall_s": 406.7197666168213
+   },
+   {
+    "a_A": 10.55,
+    "energy_eV": -333.80491001506516,
+    "total_moment_muB": 19.442614019857576,
+    "converged": true,
+    "error": "",
+    "wall_s": 665.9654765129089
+   },
+   {
+    "a_A": 10.85,
+    "energy_eV": -334.2676057603989,
+    "total_moment_muB": 20.082074433516198,
+    "converged": true,
+    "error": "",
+    "wall_s": 512.6436564922333
+   },
+   {
+    "a_A": 11.15,
+    "energy_eV": -332.56937415459174,
+    "total_moment_muB": 20.38990798586934,
+    "converged": true,
+    "error": "",
+    "wall_s": 738.6492478847504
+   },
+   {
+    "a_A": 11.45,
+    "energy_eV": -326.8790419929591,
+    "total_moment_muB": 20.597143712405256,
+    "converged": true,
+    "error": "",
+    "wall_s": 1100.707876443863
+   },
+   {
+    "a_A": 11.75,
+    "energy_eV": -320.4767761861973,
+    "total_moment_muB": 20.82502828725318,
+    "converged": true,
+    "error": "",
+    "wall_s": 1041.7623071670532
+   }
+  ]
+ }
+}

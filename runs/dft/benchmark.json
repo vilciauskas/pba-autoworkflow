@@ -1,0 +1,13 @@
+{
+ "n_atoms": 64,
+ "z_total": 604,
+ "ecut_eV": 340.0,
+ "maxiter": 3,
+ "wall_s": 42.435808181762695,
+ "s_per_scf_iteration": 14.145269393920898,
+ "peak_rss_gb": 0.6839370727539062,
+ "converged": false,
+ "note": "KohnShamConvergenceError",
+ "gamma_only": true,
+ "spinpol": true
+}

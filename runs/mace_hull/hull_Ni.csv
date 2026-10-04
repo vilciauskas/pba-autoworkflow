@@ -1,0 +1,4 @@
+na_per_fu,vacancy_fraction,energy_per_fu_eV,grand_potential_per_fu_eV,mixing_energy_eV,e_above_hull_eV,on_hull,lattice_a_A,converged,config_std_eV,n_warnings,formula
+2.0,0.0,-120.72771015263878,-120.72771015263878,0.0,0.0,True,10.180498062188148,True,,0,Na2.00Ni[Fe(CN)6]1.00
+1.0,0.25,-112.42807496414437,-91.35081832010317,-0.8594839555139657,0.0,True,9.842728462369537,True,,1,Na1.00Ni[Fe(CN)6]0.75
+0.0,0.5,-102.40947186462202,-60.254958576539636,0.0,0.0,True,10.204100790120513,False,,1,Na0.00Ni[Fe(CN)6]0.50

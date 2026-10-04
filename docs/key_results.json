@@ -1,0 +1,114 @@
+{
+ "_note": "Generated from the reference results under runs/ (simulated campaign, force-field validations, DFT scan). MACE lattice numbers are from docs/THERMO.md (measured in an e3nn-0.4.4 environment, not re-runnable alongside UMA). Campaign numbers come from the SIMULATED deck, not a laboratory.",
+ "simulated_campaign": {
+  "campaign_id": "demo-01",
+  "n_experiments": 56,
+  "status_counts": {
+   "complete": 53,
+   "failed": 2,
+   "quarantined": 1
+  },
+  "n_iterations": 6,
+  "hypervolume_trajectory": [
+   0.743,
+   0.7549,
+   0.8305,
+   0.9266,
+   0.9505,
+   0.9505
+  ],
+  "pareto_size": 3,
+  "bottleneck_station": "reactor",
+  "best": {
+   "experiment_id": "demo-01-b03-e01",
+   "metal": "Cu",
+   "formula": "Na1.90Cu[Fe(CN)6]0.94\u00b71.0H2O",
+   "objectives": {
+    "na_inventory": 0.9508,
+    "framework_integrity": 0.9386
+   },
+   "capacity_mAh_g": 101.5
+  }
+ },
+ "lattice_trend_validation": {
+  "metric": "cross-metal cubic lattice constant vs measured, 5 analogues (Mn, Fe, Co, Ni, Cu)",
+  "mace-mp-small": {
+   "mae_A": 0.254,
+   "spearman": -0.7,
+   "source": "THERMO.md"
+  },
+  "mace-mp-medium": {
+   "mae_A": 0.236,
+   "spearman": 0.1,
+   "source": "THERMO.md"
+  },
+  "pet-mad-latest": {
+   "mae_A": 0.458,
+   "spearman": -0.7,
+   "source": "runs/petmad/lattice_validation.json"
+  },
+  "uma-s-1p1-omat": {
+   "mae_A": 0.258,
+   "spearman": -0.7,
+   "source": "runs/uma_omat/lattice_validation.json"
+  },
+  "uma-s-1p1-odac": {
+   "mae_A": 0.485,
+   "spearman": -0.7,
+   "source": "runs/uma_odac/lattice_validation.json"
+  }
+ },
+ "mixing_energy_Mn_y0.25_meV_per_fu": {
+  "definition": "E(y=0.25) minus the line joining y=0 and y=0.5 on the charge-balanced path, water referenced out via mu_water; NOT a formation energy",
+  "dft_pbe_frozen": 271.2,
+  "uma_omat_frozen_matched": 509.2,
+  "uma_omat_relaxed": 12.0,
+  "mace_mp_small_relaxed": -995.9,
+  "kT_25C_meV": 25.7
+ },
+ "dft_per_composition": {
+  "0.0": {
+   "a_min_A": 10.849,
+   "E_per_fu_eV": -102.3947,
+   "n_points": 8
+  },
+  "0.25": {
+   "a_min_A": 10.792,
+   "E_per_fu_eV": -92.7595,
+   "n_points": 7
+  },
+  "0.5": {
+   "a_min_A": 10.805,
+   "E_per_fu_eV": -83.6667,
+   "n_points": 7
+  }
+ },
+ "dft_delta_a_y0.25_minus_y0_A": {
+  "dft": -0.126,
+  "dft_halfspread": 0.09,
+  "uma_frozen": 0.047,
+  "mace_relaxed": -0.35,
+  "verdict": "inconclusive: DFT fit-window spread is ~71% of the DFT value"
+ },
+ "dft_settings": {
+  "code": "GPAW 26.7.0 serial (source build)",
+  "xc": "PBE",
+  "ecut_eV": 340.0,
+  "kpts": "gamma",
+  "spin": "polarized",
+  "ions": "frozen fractional coordinates",
+  "mu_water_eV": -9.9031,
+  "cost_s_per_scf_iter_64_atoms": 14.1,
+  "peak_rss_GB": 0.68
+ },
+ "tests": {
+  "passed": 98,
+  "deselected_slow": 3
+ },
+ "codebase": {
+  "source_files": 33,
+  "source_lines": 7376,
+  "test_files": 5,
+  "test_lines": 1734
+ }
+}

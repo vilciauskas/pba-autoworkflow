@@ -5,13 +5,12 @@ message: >-
 type: software
 title: "PBA Autonomous Workflow: closed-loop orchestration for Prussian blue analogue synthesis"
 version: 0.1.0
+date-released: 2026-10-04
 license: GPL-3.0-or-later
-# TODO before publishing: replace the author entry and add the repository URL.
 authors:
-  - family-names: "FAMILY-NAME"
-    given-names: "GIVEN-NAMES"
-    # orcid: "https://orcid.org/0000-0000-0000-0000"
-# repository-code: "https://github.com/<account>/pba-autoworkflow"
+  - family-names: "Vilciauskas"
+    given-names: "Linas"
+repository-code: "https://github.com/vilciauskas/pba-autoworkflow"
 keywords:
   - self-driving laboratory
   - Prussian blue analogue

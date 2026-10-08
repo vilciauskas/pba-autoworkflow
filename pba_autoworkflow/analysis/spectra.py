@@ -38,10 +38,18 @@ _HCF_SIGMA_NM = 26.0
 SURFACE_NA_CORRECTION = 0.035
 
 
-def _basis(wl: np.ndarray) -> np.ndarray:
-    """Design matrix: [ferrocyanide band, IVCT band, Rayleigh turbidity, baseline]."""
+def _basis(wl: np.ndarray, metal: str) -> np.ndarray:
+    """Design matrix: [ferrocyanide band, IVCT/d-d band, Rayleigh turbidity, baseline]."""
     hcf = np.exp(-0.5 * ((wl - _HCF_CENTRE_NM) / _HCF_SIGMA_NM) ** 2)
-    ivct = np.exp(-0.5 * ((wl - 690.0) / 95.0) ** 2)
+    metal_bands = {
+        "Mn": (420.0, 60.0),
+        "Fe": (690.0, 95.0),
+        "Co": (530.0, 80.0),
+        "Ni": (400.0, 70.0),
+        "Cu": (480.0, 85.0),
+    }
+    center, sigma = metal_bands.get(metal, (690.0, 95.0))
+    ivct = np.exp(-0.5 * ((wl - center) / sigma) ** 2)
     turbidity = (450.0 / wl) ** 4
     baseline = np.ones_like(wl)
     return np.column_stack([hcf, ivct, turbidity, baseline])
@@ -55,7 +63,7 @@ def analyze_uvvis(spectrum: UVVisSpectrum, params: SynthesisParameters
 
     # Exclude saturated points; they carry no quantitative information.
     keep = a < 3.9
-    A = _basis(wl[keep])
+    A = _basis(wl[keep], params.metal)
     coeffs, _ = nnls(A, a[keep])
     c_hcf_band, c_ivct, _c_turb, _c_base = (float(v) for v in coeffs)
 
@@ -177,6 +185,11 @@ def estimate_capacity_mAh_g(comp: CompositionDescriptors, domain_size_nm: float,
     q_theo = theoretical_capacity_mAh_g(
         metal, comp.na_per_fu, comp.vacancy_fraction, comp.water_per_fu
     )
+    # Apply redox cap: Ni and Cu PBAs have only 1 electrochemically active site (Fe)
+    if metal in ("Ni", "Cu") and comp.na_per_fu > 0:
+        active_na = min(comp.na_per_fu, 1.0 - comp.vacancy_fraction)
+        q_theo *= (active_na / comp.na_per_fu)
+
     if not math.isfinite(domain_size_nm) or domain_size_nm <= 0:
         return float("nan")
     kinetic = float(np.clip(1.06 / (1.0 + (domain_size_nm / 95.0) ** 1.7), 0.30, 1.0))

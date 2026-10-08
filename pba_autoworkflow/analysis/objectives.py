@@ -64,12 +64,23 @@ def quality_flags(desc: SampleDescriptors, params: SynthesisParameters
         if not math.isfinite(x.lattice_a_A):
             flags.append("lattice constant not determined")
         else:
-            lo, hi = LATTICE_WINDOW_A[params.metal]
-            if not (lo <= x.lattice_a_A <= hi):
-                flags.append(
-                    f"lattice a={x.lattice_a_A:.3f} A outside "
-                    f"[{lo:.2f}, {hi:.2f}] for {params.metal}"
-                )
+            a0 = LATTICE_A0_A[params.metal]
+            comp = desc.composition
+            if comp and math.isfinite(comp.vacancy_fraction) and math.isfinite(comp.na_per_fu):
+                # Empirical slopes: vacancies contract the lattice (~ -0.4 A / vac), sodium expands it (~ +0.1 A / Na)
+                a_calc = a0 - 0.4 * comp.vacancy_fraction + 0.1 * comp.na_per_fu
+                if not (a_calc - 0.1 <= x.lattice_a_A <= a_calc + 0.1):
+                    flags.append(
+                        f"lattice a={x.lattice_a_A:.3f} A inconsistent with composition "
+                        f"(expected ~{a_calc:.2f} A via Vegard's law)"
+                    )
+            else:
+                lo, hi = LATTICE_WINDOW_A[params.metal]
+                if not (lo <= x.lattice_a_A <= hi):
+                    flags.append(
+                        f"lattice a={x.lattice_a_A:.3f} A outside "
+                        f"[{lo:.2f}, {hi:.2f}] for {params.metal}"
+                    )
         if math.isfinite(x.fit_residual) and x.fit_residual > 0.12:
             flags.append(f"indexing residual {x.fit_residual:.3f} deg")
         if math.isfinite(x.domain_size_nm) and not (1.0 <= x.domain_size_nm <= 400.0):

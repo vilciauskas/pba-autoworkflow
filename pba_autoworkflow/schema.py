@@ -287,7 +287,7 @@ def default_design_space() -> DesignSpace:
             ParameterSpec(name="c_hcf_M", low=0.01, high=0.30, unit="mol/L",
                           log_scale=True,
                           description="Na4[Fe(CN)6] in solution B"),
-            ParameterSpec(name="c_nacl_M", low=0.0, high=5.0, unit="mol/L",
+            ParameterSpec(name="c_nacl_M", low=0.0, high=3.5, unit="mol/L",
                           description="supporting NaCl, sets Na+ activity"),
             ParameterSpec(name="c_citrate_M", low=0.0, high=0.45, unit="mol/L",
                           description="sodium citrate chelator"),

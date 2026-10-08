@@ -31,7 +31,10 @@ FARADAY_C_PER_MOL = 96485.33212
 
 #: Divalent transition metals that form Prussian-blue analogues of the type
 #: Na_x M[Fe(CN)6]_(1-y) . zH2O by aqueous co-precipitation.
-METALS: tuple[str, ...] = ("Mn", "Fe", "Co", "Ni", "Cu")
+#: Zn is the exception that makes polymorphism a design question: with sodium
+#: hexacyanoferrate(II) it forms either the cubic framework or the rhombohedral
+#: Na2Zn3[Fe(CN)6]2 (R-3c, tetrahedral ZnN4), depending on synthesis and drying.
+METALS: tuple[str, ...] = ("Mn", "Fe", "Co", "Ni", "Cu", "Zn")
 
 #: Atomic weights (g/mol) needed for formula-weight bookkeeping.
 ATOMIC_WEIGHT: dict[str, float] = {
@@ -41,6 +44,7 @@ ATOMIC_WEIGHT: dict[str, float] = {
     "Co": 58.9332,
     "Ni": 58.6934,
     "Cu": 63.5460,
+    "Zn": 65.38,
     "C": 12.0107,
     "N": 14.0067,
     "O": 15.9994,
@@ -55,6 +59,7 @@ IONIC_RADIUS_A: dict[str, float] = {
     "Co": 0.745,
     "Ni": 0.690,
     "Cu": 0.730,
+    "Zn": 0.740,
 }
 
 #: Reference cubic (Fm-3m) lattice constant of the sodium-rich analogue, Angstrom.
@@ -80,6 +85,9 @@ LATTICE_A0_A: dict[str, float] = {
     "Co": 10.30,
     "Ni": 10.24,
     "Cu": 10.11,
+    # Cubic Zn3[Fe(CN)6]2.xH2O, COD 2020370 (the Zn reference is the cubic
+    # polymorph; the rhombohedral one is described by its own R-3c cell).
+    "Zn": 10.342,
 }
 
 
@@ -100,9 +108,15 @@ def formula_weight(metal: str, na_per_fu: float, vacancy_fraction: float,
 
 def theoretical_capacity_mAh_g(metal: str, na_per_fu: float,
                                vacancy_fraction: float, water_per_fu: float) -> float:
-    """Two-electron theoretical capacity for the extractable Na inventory."""
+    """Theoretical capacity for the extractable Na inventory.
+
+    Zn(II) has no accessible redox couple, so in a Zn framework only the
+    [Fe(CN)6] site can be oxidised and at most 1 - y Na per formula unit is
+    extractable (the remaining Na stays in the formula weight).
+    """
     fw = formula_weight(metal, na_per_fu, vacancy_fraction, water_per_fu)
-    return na_per_fu * FARADAY_C_PER_MOL / (3.6 * fw)
+    active = min(na_per_fu, max(1.0 - vacancy_fraction, 0.0)) if metal == "Zn" else na_per_fu
+    return active * FARADAY_C_PER_MOL / (3.6 * fw)
 
 
 # --------------------------------------------------------------------------- #
@@ -227,7 +241,7 @@ class SynthesisParameters(BaseModel):
 
     model_config = ConfigDict(extra="forbid")
 
-    metal: Literal["Mn", "Fe", "Co", "Ni", "Cu"] = "Mn"
+    metal: Literal["Mn", "Fe", "Co", "Ni", "Cu", "Zn"] = "Mn"
     c_metal_M: float = Field(..., gt=0, description="M(II) salt in solution A")
     c_hcf_M: float = Field(..., gt=0, description="Na4[Fe(CN)6] in solution B")
     c_nacl_M: float = Field(..., ge=0, description="supporting NaCl in solution B")
@@ -237,6 +251,11 @@ class SynthesisParameters(BaseModel):
     addition_rate_mL_min: float = Field(..., gt=0)
     aging_time_h: float = Field(..., gt=0)
     stir_rate_rpm: float = Field(..., ge=0, le=1500)
+    #: Drying of the washed solid.  Dehydration can change the polymorph (cubic
+    #: Zn hexacyanoferrate converts to R-3c), so drying is part of the recipe.
+    #: Defaults reproduce the earlier fixed protocol (70 degC in air).
+    dry_temperature_C: float = Field(70.0, ge=20.0, le=150.0)
+    dry_atmosphere: Literal["air", "vacuum"] = "air"
 
     # Fixed platform geometry, not optimized but recorded for provenance.
     volume_A_mL: float = 10.0
@@ -302,10 +321,14 @@ def default_design_space() -> DesignSpace:
                           log_scale=True, description="post-addition ageing"),
             ParameterSpec(name="stir_rate_rpm", low=200.0, high=1200.0, unit="rpm",
                           description="overhead stirrer setpoint"),
+            ParameterSpec(name="dry_temperature_C", low=25.0, high=120.0, unit="degC",
+                          description="drying temperature of the washed solid"),
         ),
         categorical=(
             CategoricalSpec(name="metal", choices=METALS,
                             description="divalent metal on the N-coordinated site"),
+            CategoricalSpec(name="dry_atmosphere", choices=("air", "vacuum"),
+                            description="drying under ambient air or dynamic vacuum"),
         ),
     )
 
@@ -356,19 +379,36 @@ class ICPResult:
 
 
 class XRDDescriptors(BaseModel):
+    """Structural descriptors of one powder pattern.
+
+    Undetermined numbers are NaN.  JSON has no NaN, so they are stored as null;
+    the validator below turns them back into NaN on reload (a zinc sample that
+    formed only the R-3c phase has no cubic lattice constant, for example).
+    """
+
     lattice_a_A: float
     domain_size_nm: float
     crystallinity_index: float = Field(..., ge=0.0, le=1.0)
     fwhm_200_deg: float
-    phase: Literal["cubic", "rhombohedral", "monoclinic", "amorphous"]
+    #: dominant crystalline framework phase (a phase id from the reference
+    #: library, e.g. ``pba_fm3m``, ``pba_p21n``, ``znhcf_r3c``) or ``amorphous``
+    phase: str
     n_peaks_indexed: int
     fit_residual: float
-    #: PBA share of the Bragg intensity, 0-1.  An *intensity* fraction, not a
-    #: weight fraction (that would need reference intensity ratios).  None for
-    #: results recorded before secondary phases were analysed.
-    phase_purity: float | None = Field(default=None, ge=0.0, le=1.0)
-    #: fitted peaks that index to no PBA reflection (candidate impurity lines)
-    n_impurity_peaks: int = 0
+    #: weight fraction of each identified crystalline phase (Hill-Howard, from
+    #: whole-pattern scale factors); sums to 1 over the crystalline material
+    phase_fractions: dict[str, float] = Field(default_factory=dict)
+    #: refined lattice (a, b, c, alpha, beta, gamma) of each identified phase
+    phase_lattice: dict[str, list[float]] = Field(default_factory=dict)
+    #: share of the Bragg intensity in peaks no library phase explains
+    unidentified_fraction: float = Field(default=0.0, ge=0.0, le=1.0)
+    n_unidentified_peaks: int = 0
+
+    @field_validator("lattice_a_A", "domain_size_nm", "fwhm_200_deg", "fit_residual",
+                     mode="before")
+    @classmethod
+    def _null_is_nan(cls, v):
+        return float("nan") if v is None else v
 
 
 class CompositionDescriptors(BaseModel):
@@ -430,7 +470,13 @@ class SampleDescriptors(BaseModel):
             if block is None:
                 continue
             for k, v in block.model_dump().items():
-                out[f"{prefix}_{k}"] = v
+                if isinstance(v, dict):          # e.g. phase_fractions -> xrd_w_<phase>
+                    tag = {"phase_fractions": "w", "phase_lattice": "lat"}.get(k, k)
+                    for kk, vv in v.items():
+                        out[f"{prefix}_{tag}_{kk}"] = (",".join(f"{x:.4f}" for x in vv)
+                                                       if isinstance(vv, list) else vv)
+                else:
+                    out[f"{prefix}_{k}"] = v
         return out
 
 

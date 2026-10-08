@@ -44,6 +44,9 @@ version = { attr = "pba_autoworkflow._version.__version__" }
 [tool.setuptools.packages.find]
 include = ["pba_autoworkflow*"]
 
+[tool.setuptools.package-data]
+pba_autoworkflow = ["data/*.json", "data/phases/*.cif"]
+
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 filterwarnings = ["error::RuntimeWarning"]

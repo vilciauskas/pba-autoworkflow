@@ -1,0 +1,258 @@
+#------------------------------------------------------------------------------
+#$Date: 2016-01-03 12:20:03 +0200 (Sun, 03 Jan 2016) $
+#$Revision: 172724 $
+#$URL: file:///home/coder/svn-repositories/_RELOADED_COD/cod-reloaded/cif/2/02/03/2020370.cif $
+#------------------------------------------------------------------------------
+#
+# This file is available in the Crystallography Open Database (COD),
+# http://www.crystallography.net/. The original data for this entry
+# were provided by IUCr Journals, http://journals.iucr.org/.
+#
+# The file may be used within the scientific community so long as
+# proper attribution is given to the journal article from which the
+# data were obtained.
+#
+data_2020370
+loop_
+_publ_author_name
+'Gravereau, P.'
+'Garnier, E.'
+_publ_section_title
+;
+ Structure de la Phase Cubique de l'Hexacyanoferrate(III) de Zinc:
+ Zn3(Fe(C N)6)2 * n H2 O
+;
+_journal_name_full               'Acta Crystallographica C (39,1983-)'
+_journal_page_first              1306
+_journal_page_last               1309
+_journal_volume                  40
+_journal_year                    1984
+_chemical_formula_sum
+'C15.9996 H38.44 Fe2.6666 N15.9996 O19.22 Zn3.9999'
+_chemical_name_systematic        '(Zn3 (Fe (C N)6)2)1.3333 (H2 O)19.22'
+_space_group_IT_number           225
+_symmetry_space_group_name_Hall  '-F 4 2 3'
+_symmetry_space_group_name_H-M   'F m -3 m'
+_cell_angle_alpha                90
+_cell_angle_beta                 90
+_cell_angle_gamma                90
+_cell_formula_units_Z            1
+_cell_length_a                   10.342
+_cell_length_b                   10.342
+_cell_length_c                   10.342
+_cell_volume                     1106.149
+_citation_journal_id_ASTM        ACSCEE
+_cod_data_source_file            Gravereau_ACSCEE_1984_1848.cif
+_cod_data_source_block           C15.9996H38.44Fe2.6666N15.9996O19.22Zn3.9999
+_cod_database_code               2020370
+loop_
+_symmetry_equiv_pos_as_xyz
+x,y,z
+-y,x,z
+-x,-y,z
+y,-x,z
+x,-y,-z
+y,x,-z
+-x,y,-z
+-y,-x,-z
+z,x,y
+-x,z,y
+-z,-x,y
+x,-z,y
+z,-x,-y
+x,z,-y
+-z,x,-y
+-x,-z,-y
+y,z,x
+y,-z,-x
+z,y,-x
+-y,z,-x
+-z,-y,-x
+-y,-z,x
+z,-y,x
+-z,y,x
+-x,-y,-z
+y,-x,-z
+x,y,-z
+-y,x,-z
+-x,y,z
+-y,-x,z
+x,-y,z
+y,x,z
+-z,-x,-y
+x,-z,-y
+z,x,-y
+-x,z,-y
+-z,x,y
+-x,-z,y
+z,-x,y
+x,z,y
+-y,-z,-x
+-y,z,x
+-z,-y,x
+y,-z,x
+z,y,x
+y,z,-x
+-z,y,-x
+z,-y,-x
+x,y+1/2,z+1/2
+-y,x+1/2,z+1/2
+-x,-y+1/2,z+1/2
+y,-x+1/2,z+1/2
+x,-y+1/2,-z+1/2
+y,x+1/2,-z+1/2
+-x,y+1/2,-z+1/2
+-y,-x+1/2,-z+1/2
+z,x+1/2,y+1/2
+-x,z+1/2,y+1/2
+-z,-x+1/2,y+1/2
+x,-z+1/2,y+1/2
+z,-x+1/2,-y+1/2
+x,z+1/2,-y+1/2
+-z,x+1/2,-y+1/2
+-x,-z+1/2,-y+1/2
+y,z+1/2,x+1/2
+y,-z+1/2,-x+1/2
+z,y+1/2,-x+1/2
+-y,z+1/2,-x+1/2
+-z,-y+1/2,-x+1/2
+-y,-z+1/2,x+1/2
+z,-y+1/2,x+1/2
+-z,y+1/2,x+1/2
+-x,-y+1/2,-z+1/2
+y,-x+1/2,-z+1/2
+x,y+1/2,-z+1/2
+-y,x+1/2,-z+1/2
+-x,y+1/2,z+1/2
+-y,-x+1/2,z+1/2
+x,-y+1/2,z+1/2
+y,x+1/2,z+1/2
+-z,-x+1/2,-y+1/2
+x,-z+1/2,-y+1/2
+z,x+1/2,-y+1/2
+-x,z+1/2,-y+1/2
+-z,x+1/2,y+1/2
+-x,-z+1/2,y+1/2
+z,-x+1/2,y+1/2
+x,z+1/2,y+1/2
+-y,-z+1/2,-x+1/2
+-y,z+1/2,x+1/2
+-z,-y+1/2,x+1/2
+y,-z+1/2,x+1/2
+z,y+1/2,x+1/2
+y,z+1/2,-x+1/2
+-z,y+1/2,-x+1/2
+z,-y+1/2,-x+1/2
+x+1/2,y,z+1/2
+-y+1/2,x,z+1/2
+-x+1/2,-y,z+1/2
+y+1/2,-x,z+1/2
+x+1/2,-y,-z+1/2
+y+1/2,x,-z+1/2
+-x+1/2,y,-z+1/2
+-y+1/2,-x,-z+1/2
+z+1/2,x,y+1/2
+-x+1/2,z,y+1/2
+-z+1/2,-x,y+1/2
+x+1/2,-z,y+1/2
+z+1/2,-x,-y+1/2
+x+1/2,z,-y+1/2
+-z+1/2,x,-y+1/2
+-x+1/2,-z,-y+1/2
+y+1/2,z,x+1/2
+y+1/2,-z,-x+1/2
+z+1/2,y,-x+1/2
+-y+1/2,z,-x+1/2
+-z+1/2,-y,-x+1/2
+-y+1/2,-z,x+1/2
+z+1/2,-y,x+1/2
+-z+1/2,y,x+1/2
+-x+1/2,-y,-z+1/2
+y+1/2,-x,-z+1/2
+x+1/2,y,-z+1/2
+-y+1/2,x,-z+1/2
+-x+1/2,y,z+1/2
+-y+1/2,-x,z+1/2
+x+1/2,-y,z+1/2
+y+1/2,x,z+1/2
+-z+1/2,-x,-y+1/2
+x+1/2,-z,-y+1/2
+z+1/2,x,-y+1/2
+-x+1/2,z,-y+1/2
+-z+1/2,x,y+1/2
+-x+1/2,-z,y+1/2
+z+1/2,-x,y+1/2
+x+1/2,z,y+1/2
+-y+1/2,-z,-x+1/2
+-y+1/2,z,x+1/2
+-z+1/2,-y,x+1/2
+y+1/2,-z,x+1/2
+z+1/2,y,x+1/2
+y+1/2,z,-x+1/2
+-z+1/2,y,-x+1/2
+z+1/2,-y,-x+1/2
+x+1/2,y+1/2,z
+-y+1/2,x+1/2,z
+-x+1/2,-y+1/2,z
+y+1/2,-x+1/2,z
+x+1/2,-y+1/2,-z
+y+1/2,x+1/2,-z
+-x+1/2,y+1/2,-z
+-y+1/2,-x+1/2,-z
+z+1/2,x+1/2,y
+-x+1/2,z+1/2,y
+-z+1/2,-x+1/2,y
+x+1/2,-z+1/2,y
+z+1/2,-x+1/2,-y
+x+1/2,z+1/2,-y
+-z+1/2,x+1/2,-y
+-x+1/2,-z+1/2,-y
+y+1/2,z+1/2,x
+y+1/2,-z+1/2,-x
+z+1/2,y+1/2,-x
+-y+1/2,z+1/2,-x
+-z+1/2,-y+1/2,-x
+-y+1/2,-z+1/2,x
+z+1/2,-y+1/2,x
+-z+1/2,y+1/2,x
+-x+1/2,-y+1/2,-z
+y+1/2,-x+1/2,-z
+x+1/2,y+1/2,-z
+-y+1/2,x+1/2,-z
+-x+1/2,y+1/2,z
+-y+1/2,-x+1/2,z
+x+1/2,-y+1/2,z
+y+1/2,x+1/2,z
+-z+1/2,-x+1/2,-y
+x+1/2,-z+1/2,-y
+z+1/2,x+1/2,-y
+-x+1/2,z+1/2,-y
+-z+1/2,x+1/2,y
+-x+1/2,-z+1/2,y
+z+1/2,-x+1/2,y
+x+1/2,z+1/2,y
+-y+1/2,-z+1/2,-x
+-y+1/2,z+1/2,x
+-z+1/2,-y+1/2,x
+y+1/2,-z+1/2,x
+z+1/2,y+1/2,x
+y+1/2,z+1/2,-x
+-z+1/2,y+1/2,-x
+z+1/2,-y+1/2,-x
+loop_
+_atom_site_label
+_atom_site_type_symbol
+_atom_site_fract_x
+_atom_site_fract_y
+_atom_site_fract_z
+_atom_site_occupancy
+_atom_site_U_iso_or_equiv
+O1 O-2 0.2872 0 0 0.3333 0.0
+O3 O-2 0.1432 0.1432 0.1432 0.084 0.0
+O4 O-2 0.2067 0.2067 0.2067 0.17 0.0
+N1 N-3 0.2975 0 0 0.6667 0.0
+C1 C+2 0.1858 0 0 0.6667 0.0
+Fe1 Fe+3 0 0 0 0.6667 0.0
+O5 O-2 0.25 0.25 0.25 0.341 0.0
+Zn1 Zn+2 0.5 0 0 1 0.0
+O2 O-2 0 0 0 0.092 0.0

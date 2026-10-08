@@ -52,9 +52,12 @@ class WorkflowConfig:
     xrd_step_deg: float = 0.02
     xrd_exposure_s: float = 120.0
     wash_cycles: int = 3
-    dry_temperature_C: float = 70.0
+    #: drying temperature and atmosphere are recipe parameters
+    #: (``SynthesisParameters.dry_temperature_C`` / ``dry_atmosphere``)
     dry_duration_s: float = 3600.0
-    icp_elements: tuple[str, ...] = ("Na", "Fe", "Mn", "Co", "Ni", "Cu")
+    icp_elements: tuple[str, ...] = ("Na", "Fe", "Mn", "Co", "Ni", "Cu", "Zn")
+    #: framework phase whose weight fraction is the first objective
+    target_phase: str = "pba_fm3m"
     max_transport_retries: int = 2
     retry_backoff_s: float = 1.0
 
@@ -221,8 +224,9 @@ class ExperimentWorkflow:
                              lambda: wu.wash(solid, self.config.wash_cycles),
                              retryable=False)
             await self._call(exp, wu.device_id, "dry",
-                             lambda: wu.dry(solid, self.config.dry_temperature_C,
-                                            self.config.dry_duration_s))
+                             lambda: wu.dry(solid, exp.parameters.dry_temperature_C,
+                                            self.config.dry_duration_s,
+                                            vacuum=exp.parameters.dry_atmosphere == "vacuum"))
             mass_mg = await self._call(exp, wu.device_id, "weigh",
                                        lambda: wu.weigh(solid))
             exp.metadata["dry_mass_mg"] = mass_mg
@@ -252,7 +256,7 @@ class ExperimentWorkflow:
                 )
                 exp.raw_refs["xrd"] = ref
                 trace.add("xrd", True, t0)
-            return analyze_pattern(pattern)
+            return await asyncio.to_thread(analyze_pattern, pattern, exp.parameters.metal)
 
         async def do_icp():
             ea = self.platform.elemental
@@ -356,7 +360,9 @@ class ExperimentWorkflow:
             qc = quality_flags(exp.descriptors, exp.parameters)
             qc_flags = qc.flags
             if qc.passed:
-                exp.objectives = compute_objectives(exp.descriptors, exp.parameters)
+                exp.objectives = compute_objectives(exp.descriptors, exp.parameters,
+                                                    target_phase=self.config.target_phase)
+                exp.metadata["target_phase"] = self.config.target_phase
                 exp.status = ExperimentStatus.COMPLETE
             else:
                 exp.status = ExperimentStatus.QUARANTINED

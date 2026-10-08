@@ -7,13 +7,13 @@ the rest of the package.  They emit the same objects a real driver would return
 :class:`~pba_autoworkflow.schema.ICPResult`) so that the analysis layer can be developed,
 unit-tested and later pointed at real hardware without changing a line.
 
-The XRD generator is a forward model: it places the allowed reflections of the
-face-centred cubic PBA framework at Bragg positions computed from the latent
-lattice constant, broadens them by Scherrer plus a fixed instrumental term, adds
-a rhombohedral/monoclinic splitting when the latent phase calls for it, adds the
-lines of crystalline secondary phases (NaCl residue, metal hydroxide or CuO at
-high pH), and lays the whole thing on a decaying amorphous background with
-Poisson counting noise.
+The XRD generator is a forward model over the latent phase assemblage: every
+crystalline phase (framework polymorphs and secondary phases) contributes the
+reflections of its reference structure from the phase library at its latent
+lattice, broadened by Scherrer plus a fixed instrumental term, with a random
+per-reflection texture factor; the disordered framework share adds a broad
+halo, and the whole thing sits on a decaying background with Poisson counting
+noise.
 Extracting the lattice constant back out of that pattern is a genuine fitting
 problem.
 """
@@ -27,54 +27,15 @@ import numpy as np
 from ..schema import ICPResult, SynthesisParameters, XRDPattern
 from .ground_truth import LatentState
 
-#: Allowed reflections of the Fm-3m PBA framework with relative structure
-#: factors typical of a sodium-rich hexacyanoferrate.
-_HKL: tuple[tuple[tuple[int, int, int], float], ...] = (
-    ((2, 0, 0), 1.00),
-    ((2, 2, 0), 0.62),
-    ((4, 0, 0), 0.28),
-    ((4, 2, 0), 0.44),
-    ((4, 2, 2), 0.30),
-    ((4, 4, 0), 0.18),
-    ((6, 0, 0), 0.12),
-    ((6, 2, 0), 0.16),
-    ((6, 4, 2), 0.10),
-)
-
 _INSTRUMENT_FWHM_DEG = 0.085  # Caglioti-like constant term of the diffractometer
-
-
 _SQRT_2PI = math.sqrt(2.0 * math.pi)
 _IMPURITY_DOMAIN_NM = 45.0
 _REFERENCE_DOMAIN_NM = 40.0
 _HALO_SIGMA_DEG = 5.5
-
-
-def _hexagonal_d(a: float, c: float, h: int, k: int, l: int) -> float:
-    return 1.0 / math.sqrt(4.0 / 3.0 * (h * h + h * k + k * k) / a ** 2 + l * l / c ** 2)
-
-
-def _brucite_lines(a: float, c: float) -> tuple[tuple[float, float], ...]:
-    """(d, relative intensity) of the main brucite-type M(OH)2 reflections."""
-    hkl_rel = (((0, 0, 1), 1.0), ((1, 0, 0), 0.35), ((1, 0, 1), 0.9),
-               ((1, 0, 2), 0.25), ((1, 1, 0), 0.2))
-    return tuple((_hexagonal_d(a, c, *hkl), r) for hkl, r in hkl_rel)
-
-
-#: Rock-salt NaCl, a = 5.640 A: (111), (200), (220), (311), (222).
-_NACL_LINES: tuple[tuple[float, float], ...] = tuple(
-    (5.640 / math.sqrt(m), r) for m, r in ((3, 0.13), (4, 1.0), (8, 0.55), (11, 0.02), (12, 0.15))
-)
-
-#: Secondary phase formed at high pH, per metal.  Approximate lattice
-#: parameters / d-spacings; Cu is represented by tenorite CuO.
-_HYDROXIDE_LINES: dict[str, tuple[tuple[float, float], ...]] = {
-    "Mn": _brucite_lines(3.322, 4.734),
-    "Fe": _brucite_lines(3.258, 4.605),
-    "Co": _brucite_lines(3.183, 4.652),
-    "Ni": _brucite_lines(3.126, 4.605),
-    "Cu": ((2.523, 1.0), (2.323, 0.96), (1.866, 0.25), (1.581, 0.14), (1.505, 0.14)),
-}
+#: Per-reflection log-normal intensity scatter (texture, counting statistics of
+#: the powder): keeps the forward model from being an exact copy of the
+#: analysis templates.
+_TEXTURE_SIGMA = 0.08
 
 
 def _bragg_two_theta(d_A: float, wavelength_A: float) -> float | None:
@@ -84,11 +45,18 @@ def _bragg_two_theta(d_A: float, wavelength_A: float) -> float | None:
     return 2.0 * math.degrees(math.asin(ratio))
 
 
-def _scherrer_fwhm_deg(domain_nm: float, two_theta_deg: float,
-                       wavelength_A: float, K: float = 0.9) -> float:
-    theta = math.radians(two_theta_deg / 2.0)
-    beta_rad = K * (wavelength_A * 0.1) / (domain_nm * max(math.cos(theta), 1e-3))
-    return math.degrees(beta_rad)
+def _scherrer_fwhm_deg(domain_nm, two_theta_deg, wavelength_A: float, K: float = 0.9):
+    theta = np.radians(np.asarray(two_theta_deg, dtype=float) / 2.0)
+    beta_rad = K * (wavelength_A * 0.1) / (domain_nm * np.maximum(np.cos(theta), 1e-3))
+    return np.degrees(beta_rad)
+
+
+def _phase_scale(latent: LatentState, ref) -> tuple[float, ...]:
+    if ref.key in latent.lattice_scale:
+        return tuple(latent.lattice_scale[ref.key])
+    if ref.phase_id == "pba_fm3m":
+        return (latent.lattice_a_A / ref.lattice[0],)
+    return (1.0, 1.0) if ref.strain == "ac" else (1.0,)
 
 
 def simulate_xrd(
@@ -100,69 +68,66 @@ def simulate_xrd(
     exposure_s: float = 120.0,
     peak_counts: float = 9000.0,
 ) -> XRDPattern:
-    """Forward-model a powder pattern from the latent structural state."""
+    """Forward-model a powder pattern from the latent phase assemblage.
+
+    Every crystalline phase contributes its library reflections (``|F|^2`` times
+    Lorentz-polarization) with a Hill-Howard scale ``S_p ~ w_p / (Z M V)_p``, so
+    the weight fractions of :meth:`LatentState.xrd_weight_fractions` are what a
+    perfect quantification would recover.  The disordered share of the framework
+    scatters into a broad halo near the strongest low-angle framework line.
+    Intensities are normalised so that a fully ordered, single-phase Fm-3m
+    framework of the same metal has its strongest line at ``peak_counts``.
+    """
+    from ..analysis.phases import load_library
+
+    lib = load_library()
     tt = np.arange(two_theta_range[0], two_theta_range[1] + step_deg, step_deg)
+    ext = (two_theta_range[0] - 1.0, two_theta_range[1] + 1.0)
+
+    ref0 = lib[f"pba_fm3m/{latent.metal}"]
+    tt0, I0 = ref0.lines((1.0,), wavelength_A, ext)
+    i0 = int(np.argmax(I0))
+    fwhm0 = math.hypot(float(_scherrer_fwhm_deg(_REFERENCE_DOMAIN_NM, tt0[i0], wavelength_A)),
+                       _INSTRUMENT_FWHM_DEG)
+    K = peak_counts * (fwhm0 / 2.3548) * _SQRT_2PI / (I0[i0] / (ref0.cell_mass_amu * ref0.cell_volume_A3))
+
     signal = np.zeros_like(tt)
+    halo_area = 0.0
+    framework_mass = max(1.0 - latent.nacl_fraction - latent.hydroxide_fraction, 0.0)
+    dominant = max(latent.polymorph_shares, key=latent.polymorph_shares.get,
+                   default=f"pba_fm3m/{latent.metal}")
+    hump_centre = 25.0
 
-    a = latent.lattice_a_A
-    # Amorphous / poorly-ordered fraction shows up as a broad hump near the
-    # strongest framework correlation.
-    order = latent.crystallinity
-    ref_area = 0.0   # integrated Bragg intensity of a fully ordered PBA pattern
+    def add_phase(ref, mass: float, domain_nm: float) -> float:
+        scale = _phase_scale(latent, ref)
+        ltt, lI = ref.lines(scale, wavelength_A, ext)
+        if ltt.size == 0:
+            return 0.0
+        c = K * mass / (ref.cell_mass_amu * ref.volume(scale))
+        area = c * lI * np.exp(rng.normal(0.0, _TEXTURE_SIGMA, size=lI.size))
+        sigma = np.hypot(_scherrer_fwhm_deg(domain_nm, ltt, wavelength_A), _INSTRUMENT_FWHM_DEG) / 2.3548
+        nonlocal signal
+        signal = signal + (np.exp(-0.5 * ((tt[:, None] - ltt[None, :]) / sigma[None, :]) ** 2)
+                           / (sigma[None, :] * _SQRT_2PI)) @ area
+        return float(c * lI.sum())
 
-    for (h, k, l), rel in _HKL:
-        d = a / math.sqrt(h * h + k * k + l * l)
-        centre = _bragg_two_theta(d, wavelength_A)
-        if centre is None or not (tt[0] < centre < tt[-1]):
-            continue
-        fwhm = math.hypot(
-            _scherrer_fwhm_deg(latent.domain_size_nm, centre, wavelength_A),
-            _INSTRUMENT_FWHM_DEG,
-        )
-        sigma = fwhm / 2.3548
-        # Lorentz-polarization and thermal fall-off with angle.  Broadening
-        # conserves integrated intensity: ``peak_counts`` is the height a
-        # reflection would have at the reference domain size.
-        sigma_ref = math.hypot(_scherrer_fwhm_deg(_REFERENCE_DOMAIN_NM, centre, wavelength_A),
-                               _INSTRUMENT_FWHM_DEG) / 2.3548
-        amp_full = peak_counts * rel / (1.0 + (centre / 55.0) ** 2) * sigma_ref / sigma
-        ref_area += amp_full * sigma * _SQRT_2PI
-        amp = amp_full * order
+    for key, share in latent.polymorph_shares.items():
+        ref = lib[key]
+        mass = framework_mass * share
+        full = add_phase(ref, mass * latent.crystallinity, latent.domain_size_nm)
+        if latent.crystallinity > 0:
+            halo_area += full / latent.crystallinity * (1.0 - latent.crystallinity)
+        if key == dominant:
+            ltt, lI = ref.lines(_phase_scale(latent, ref), wavelength_A, (10.0, 30.0))
+            if ltt.size:
+                hump_centre = float(ltt[int(np.argmax(lI))])
+    from .ground_truth import HIGH_PH_PHASE
+    for key, mass in (("nacl", latent.nacl_fraction),
+                      (HIGH_PH_PHASE.get(latent.metal, ""), latent.hydroxide_fraction)):
+        if mass > 0 and key in lib:
+            add_phase(lib[key], mass, _IMPURITY_DOMAIN_NM)
 
-        if latent.phase in ("rhombohedral", "monoclinic") and (h + k + l) % 4 != 0:
-            # Distortion splits the affected reflections.
-            split = 0.16 if latent.phase == "rhombohedral" else 0.31
-            for offset, weight in ((-split / 2, 0.55), (split / 2, 0.45)):
-                signal += amp * weight * np.exp(
-                    -0.5 * ((tt - (centre + offset)) / sigma) ** 2
-                )
-        else:
-            signal += amp * np.exp(-0.5 * ((tt - centre) / sigma) ** 2)
-
-    # Secondary crystalline phases.  Each gets ``fraction * ref_area`` of
-    # integrated intensity, so the PBA share of all Bragg intensity is
-    # order / (order + sum of fractions) -- what an intensity-based phase purity
-    # should recover.
-    impurities = ((_NACL_LINES, latent.nacl_fraction),
-                  (_HYDROXIDE_LINES.get(latent.metal, ()), latent.hydroxide_fraction))
-    for lines, fraction in impurities:
-        visible = [(c, r) for c, r in ((_bragg_two_theta(d, wavelength_A), r) for d, r in lines)
-                   if c is not None and tt[0] < c < tt[-1]]
-        if fraction <= 0 or not visible:
-            continue
-        total_rel = sum(r for _, r in visible)
-        for centre, rel in visible:
-            fwhm = math.hypot(_scherrer_fwhm_deg(_IMPURITY_DOMAIN_NM, centre, wavelength_A),
-                              _INSTRUMENT_FWHM_DEG)
-            sigma = fwhm / 2.3548
-            area = ref_area * fraction * rel / total_rel
-            signal += area / (sigma * _SQRT_2PI) * np.exp(-0.5 * ((tt - centre) / sigma) ** 2)
-
-    # Amorphous hump + air-scatter background.
-    hump_centre = _bragg_two_theta(a / 2.0, wavelength_A) or 25.0
-    # The halo carries the scattering the disordered fraction does not put into
-    # Bragg peaks, so the PBA intensity crystallinity equals ``order``.
-    signal += ref_area * (1.0 - order) / (_HALO_SIGMA_DEG * _SQRT_2PI) * np.exp(
+    signal += halo_area / (_HALO_SIGMA_DEG * _SQRT_2PI) * np.exp(
         -0.5 * ((tt - hump_centre) / _HALO_SIGMA_DEG) ** 2
     )
     background = 120.0 + 2200.0 * np.exp(-(tt - tt[0]) / 9.0)

@@ -3,7 +3,7 @@
 
 The important tests here are not the round-trips -- they are the two that check
 the *analysis* recovers the hidden truth from a simulated trace
-(``test_xrd_recovers_lattice_constant``, ``test_xrd_recovers_phase_purity``) and
+(``test_xrd_recovers_lattice_constant``, ``test_xrd_recovers_secondary_phase_fractions``) and
 the two that check the orchestrator behaves under failure
 (``test_hardware_fault_does_not_kill_campaign``, ``test_station_exclusivity``).
 Those are the properties that decide whether the loop is trustworthy on real
@@ -161,22 +161,26 @@ def _latent_with(metal="Mn", **impurity):
 
 
 @pytest.mark.parametrize("metal,impurity", [("Mn", {"nacl": 0.25}), ("Co", {"hydroxide": 0.3}),
-                                            ("Ni", {"nacl": 0.1, "hydroxide": 0.15})])
-def test_xrd_recovers_phase_purity(metal, impurity):
-    """Secondary-phase lines are found, and do not bias the PBA lattice constant."""
+                                            ("Ni", {"nacl": 0.1, "hydroxide": 0.15}),
+                                            ("Cu", {"hydroxide": 0.2})])
+def test_xrd_recovers_secondary_phase_fractions(metal, impurity):
+    """Secondary phases are identified, quantified, and do not bias the PBA lattice."""
     lat = _latent_with(metal, **impurity)
-    desc = analyze_pattern(simulate_xrd(lat, np.random.default_rng(1)))
-    truth = lat.crystallinity / (lat.crystallinity + sum(impurity.values()))
-    assert desc.n_impurity_peaks >= 2
-    assert desc.phase_purity == pytest.approx(truth, abs=0.06)
+    desc = analyze_pattern(simulate_xrd(lat, np.random.default_rng(1)), metal)
+    truth = lat.xrd_weight_fractions()
+    for phase, w in truth.items():
+        if w > 0.02:
+            assert desc.phase_fractions.get(phase, 0.0) == pytest.approx(w, abs=0.06), (phase, desc.phase_fractions)
     assert desc.lattice_a_A == pytest.approx(lat.lattice_a_A, abs=0.01)
-    assert desc.phase == "cubic", "impurity lines next to PBA reflections are not a distortion"
+    assert desc.phase == "pba_fm3m"
+    assert desc.unidentified_fraction < 0.05
 
 
-def test_xrd_pure_pattern_has_no_impurity_lines():
+def test_xrd_pure_pattern_has_only_the_framework_phase():
     lat = _latent_with("Fe")
-    desc = analyze_pattern(simulate_xrd(lat, np.random.default_rng(1)))
-    assert desc.n_impurity_peaks == 0 and desc.phase_purity == pytest.approx(1.0)
+    desc = analyze_pattern(simulate_xrd(lat, np.random.default_rng(1)), "Fe")
+    assert desc.phase_fractions.get("pba_fm3m", 0.0) > 0.97, desc.phase_fractions
+    assert desc.n_unidentified_peaks == 0
 
 
 def test_xrd_crystallinity_tracks_order():
@@ -197,12 +201,12 @@ def test_amorphous_product_is_scored_not_quarantined():
     """An amorphous result is information about phase formation, not bad data."""
     x = XRDDescriptors(lattice_a_A=float("nan"), domain_size_nm=float("nan"),
                        crystallinity_index=0.05, fwhm_200_deg=float("nan"), phase="amorphous",
-                       n_peaks_indexed=0, fit_residual=float("inf"), phase_purity=0.0)
+                       n_peaks_indexed=0, fit_residual=float("inf"))
     comp = CompositionDescriptors(na_per_fu=1.0, fe_per_metal=0.8, vacancy_fraction=0.2,
                                   water_per_fu=3.0, formula="t")
     desc = SampleDescriptors(xrd=x, composition=comp, isolated_yield=0.6)
     assert quality_flags(desc, recipe()).passed
-    assert compute_objectives(desc, recipe()).values["phase_purity"] == 0.0
+    assert compute_objectives(desc, recipe()).values["target_phase_fraction"] == 0.0
 
 
 def test_icp_recovers_composition():
@@ -260,7 +264,7 @@ def test_qc_rejects_lattice_outside_metal_window():
     desc = SampleDescriptors(
         xrd=XRDDescriptors(lattice_a_A=8.55, domain_size_nm=20.0,
                            crystallinity_index=0.7, fwhm_200_deg=0.3,
-                           phase="cubic", n_peaks_indexed=4, fit_residual=0.02),
+                           phase="pba_fm3m", n_peaks_indexed=4, fit_residual=0.02),
     )
     report = quality_flags(desc, recipe(metal="Mn"))
     assert not report.passed
@@ -343,8 +347,9 @@ def test_hypervolume_monotone_under_added_point():
 
 def test_sobol_seed_covers_all_metals():
     space = default_design_space()
-    sugg = SobolPlanner(space, seed=0).suggest(10, [])
-    assert len({s.parameters.metal for s in sugg}) == 5
+    sugg = SobolPlanner(space, seed=0).suggest(16, [])
+    assert {s.parameters.metal for s in sugg} == set(METALS)
+    assert {s.parameters.dry_atmosphere for s in sugg} == {"air", "vacuum"}
 
 
 def test_bayes_planner_falls_back_when_undertrained():
@@ -503,7 +508,7 @@ def test_traces_are_reanalyzable(tmp_path):
         if "xrd" not in exp.raw_refs or exp.descriptors.xrd is None:
             continue
         arr = store.load_trace(exp.raw_refs["xrd"])
-        again = analyze_pattern(XRDPattern(arr["two_theta_deg"], arr["intensity"]))
+        again = analyze_pattern(XRDPattern(arr["two_theta_deg"], arr["intensity"]), exp.parameters.metal)
         assert again.lattice_a_A == pytest.approx(exp.descriptors.xrd.lattice_a_A,
                                                  abs=1e-6, nan_ok=True)
         checked += 1
@@ -661,7 +666,7 @@ def test_summary_is_serializable(tmp_path):
     assert "campaign_id" in text
     df = c.dataframe()
     assert len(df) == len(c.history)
-    assert "obj_phase_purity" in df.columns or "status" in df.columns
+    assert "obj_target_phase_fraction" in df.columns or "status" in df.columns
     store.close()
 
 
@@ -706,9 +711,14 @@ def test_indexing_recovers_lattice_across_series_and_temperature():
     worst = 0.0
     for metal in METALS:
         for T in (35.0, 65.0, 85.0):
-            p = recipe(metal=metal, temperature_C=T, aging_time_h=12.0)
+            # Zn: drying cold keeps the cubic polymorph present and indexable
+            p = recipe(metal=metal, temperature_C=T, aging_time_h=12.0,
+                       addition_rate_mL_min=10.0 if metal == "Zn" else 0.5,
+                       dry_temperature_C=30.0 if metal == "Zn" else 70.0)
             latent = gt.latent(p, rng)
-            desc = analyze_pattern(simulate_xrd(latent, rng))
+            if latent.polymorph_shares.get(f"pba_fm3m/{metal}", 0.0) < 0.5:
+                continue
+            desc = analyze_pattern(simulate_xrd(latent, rng), metal)
             worst = max(worst, abs(desc.lattice_a_A - latent.lattice_a_A))
             lo, hi = LATTICE_WINDOW_A[metal]
             assert lo <= desc.lattice_a_A <= hi
@@ -736,19 +746,21 @@ def test_reflection_labels_are_generated_not_tabulated():
     assert 5 not in allowed_reflections(parity="all")
 
 
-def test_phase_objectives_preserve_ordering():
-    """Purer and more crystalline patterns must score strictly higher."""
-    def xd(purity, cryst):
+def test_target_phase_objective_follows_target_and_discounts_unknowns():
+    def xd(fracs, cryst, unid=0.0):
         return XRDDescriptors(lattice_a_A=10.2, domain_size_nm=40.0, crystallinity_index=cryst,
-                              fwhm_200_deg=0.2, phase="cubic", n_peaks_indexed=8,
-                              fit_residual=0.01, phase_purity=purity)
-    vals = [compute_objectives(SampleDescriptors(xrd=xd(p, c), isolated_yield=0.6), recipe()).values
-            for p, c in ((0.70, 0.50), (0.85, 0.65), (0.97, 0.80), (1.00, 0.95))]
-    assert [v["phase_purity"] for v in vals] == [0.70, 0.85, 0.97, 1.00]
-    assert [v["crystallinity"] for v in vals] == [0.50, 0.65, 0.80, 0.95]
-    # no pattern scores zero, it is not imputed
+                              fwhm_200_deg=0.2, phase="pba_fm3m", n_peaks_indexed=8,
+                              fit_residual=0.01, phase_fractions=fracs, unidentified_fraction=unid)
+    mix = {"pba_fm3m": 0.3, "znhcf_r3c": 0.6, "zno": 0.1}
+    d = SampleDescriptors(xrd=xd(mix, 0.8), isolated_yield=0.6)
+    zn = recipe(metal="Zn")
+    assert compute_objectives(d, zn, target_phase="znhcf_r3c").values["target_phase_fraction"] == pytest.approx(0.6)
+    assert compute_objectives(d, zn, target_phase="pba_fm3m").values["target_phase_fraction"] == pytest.approx(0.3)
+    assert compute_objectives(d, zn).values["crystallinity"] == pytest.approx(0.8)
+    d_unknown = SampleDescriptors(xrd=xd(mix, 0.8, unid=0.5), isolated_yield=0.6)
+    assert compute_objectives(d_unknown, zn, target_phase="znhcf_r3c").values["target_phase_fraction"] == pytest.approx(0.3)
     none = compute_objectives(SampleDescriptors(isolated_yield=0.6), recipe()).values
-    assert none == {"phase_purity": 0.0, "crystallinity": 0.0}
+    assert none == {"target_phase_fraction": 0.0, "crystallinity": 0.0}
 
 
 def test_formula_weight_clamps_negative_vacancy():
@@ -835,14 +847,14 @@ def test_scalarize_never_prefers_infeasible_over_feasible():
     characterize.
     """
     great_but_infeasible = Objectives(
-        values={"phase_purity": 1.0, "crystallinity": 1.0},
+        values={"target_phase_fraction": 1.0, "crystallinity": 1.0},
         constraints={"isolated_yield": -0.30}, feasible=False)
     poor_but_feasible = Objectives(
-        values={"phase_purity": 0.05, "crystallinity": 0.05},
+        values={"target_phase_fraction": 0.05, "crystallinity": 0.05},
         constraints={"isolated_yield": 0.01}, feasible=True)
     assert scalarize(poor_but_feasible) > scalarize(great_but_infeasible)
     # Among infeasible points, a smaller shortfall must still rank higher.
-    near_miss = Objectives(values={"phase_purity": 0.5, "crystallinity": 0.5},
+    near_miss = Objectives(values={"target_phase_fraction": 0.5, "crystallinity": 0.5},
                            constraints={"isolated_yield": -0.01}, feasible=False)
     assert scalarize(near_miss) > scalarize(great_but_infeasible)
 
@@ -976,3 +988,126 @@ def test_xrd_population_no_false_distortion_and_bounded_crystallinity_bias():
         bias.append(d.crystallinity_index - lat.crystallinity)
     assert false_split <= 1, f"{false_split} cubic samples called distorted"
     assert abs(float(np.median(bias))) < 0.25, f"median crystallinity bias {np.median(bias):+.3f}"
+
+
+
+# --------------------------------------------------------------------------- #
+# Polymorph control
+# --------------------------------------------------------------------------- #
+
+def _zn(**over):
+    base = dict(metal="Zn", c_metal_M=0.05, c_hcf_M=0.05, c_nacl_M=1.0, c_citrate_M=0.05, ph=4.0,
+                temperature_C=25.0, addition_rate_mL_min=15.0, aging_time_h=0.5, dry_temperature_C=30.0)
+    base.update(over)
+    return recipe(**base)
+
+
+def test_nan_descriptors_survive_a_json_round_trip():
+    x = XRDDescriptors(lattice_a_A=float("nan"), domain_size_nm=30.0, crystallinity_index=0.6,
+                       fwhm_200_deg=0.3, phase="znhcf_r3c", n_peaks_indexed=9, fit_residual=0.02,
+                       phase_fractions={"znhcf_r3c": 1.0})
+    again = XRDDescriptors.model_validate_json(x.model_dump_json())
+    assert math.isnan(again.lattice_a_A) and again.phase_fractions == {"znhcf_r3c": 1.0}
+
+
+def test_phase_library_is_consistent():
+    from pba_autoworkflow.analysis.phases import CANDIDATES, FRAMEWORK_PHASES, load_library
+    lib = load_library()
+    for metal in METALS:
+        assert f"pba_fm3m/{metal}" in CANDIDATES[metal]
+        for key in CANDIDATES[metal]:
+            assert key in lib and lib[key].f2m.size > 0
+    assert set(FRAMEWORK_PHASES) == {r.phase_id for r in lib.values() if r.framework}
+    # NaCl (200) at a = 5.640 A, Cu Ka1
+    tt, inten = lib["nacl"].lines((1.0,), 1.5406, (10.0, 60.0))
+    assert tt[int(np.argmax(inten))] == pytest.approx(31.70, abs=0.02)
+
+
+@pytest.mark.parametrize("over", [dict(), dict(dry_temperature_C=110.0, dry_atmosphere="vacuum"),
+                                  dict(temperature_C=60.0, addition_rate_mL_min=0.5, aging_time_h=6.0)])
+def test_zn_polymorph_fractions_recovered(over):
+    """Weight fractions of the two Zn polymorphs, for a well-ordered framework.
+
+    Below an ordered fraction of ~0.5 the R-3c share reads systematically high
+    (see ``test_zn_low_order_bias_is_bounded``), so this sets order = 0.7.
+    """
+    gt = GroundTruth(seed=1, reproducibility=0.0, failure_rate=0.0)
+    lat = gt.latent(_zn(**over), np.random.default_rng(3))
+    lat.crystallinity = 0.7
+    desc = analyze_pattern(simulate_xrd(lat, np.random.default_rng(4)), "Zn")
+    truth = lat.xrd_weight_fractions()
+    for phase in ("znhcf_r3c", "pba_fm3m"):
+        assert desc.phase_fractions.get(phase, 0.0) == pytest.approx(truth.get(phase, 0.0), abs=0.08), \
+            (phase, truth, desc.phase_fractions)
+
+
+def test_hot_or_vacuum_drying_converts_cubic_zn_to_r3c():
+    gt = GroundTruth(seed=1, reproducibility=0.0, failure_rate=0.0)
+    share = lambda **o: gt.latent(_zn(**o), np.random.default_rng(3)).polymorph_shares.get("znhcf_r3c/Zn", 0.0)
+    cold, hot, vac = share(), share(dry_temperature_C=100.0), share(dry_temperature_C=55.0, dry_atmosphere="vacuum")
+    assert cold < 0.5 < hot and vac > share(dry_temperature_C=55.0)
+
+
+def test_no_false_monoclinic_in_cubic_mn_fe():
+    """Low-symmetry phases must not absorb intensity mismatch of a cubic pattern."""
+    gt = GroundTruth(seed=0, reproducibility=0.0, failure_rate=0.0)
+    rng = np.random.default_rng(5)
+    false = n = 0
+    for k in range(16):
+        metal = ("Mn", "Fe")[k % 2]
+        p = recipe(metal=metal, c_nacl_M=float(rng.uniform(0, 1)), c_hcf_M=float(rng.uniform(0.02, 0.06)),
+                   temperature_C=float(rng.uniform(30, 80)), aging_time_h=float(rng.uniform(1, 20)))
+        lat = gt.latent(p, rng)
+        if lat.failed or lat.polymorph_shares.get(f"pba_p21n/{metal}", 0.0) > 0.01:
+            continue
+        n += 1
+        false += analyze_pattern(simulate_xrd(lat, rng), metal).phase_fractions.get("pba_p21n", 0.0) > 0.05
+    assert n >= 8 and false == 0, (false, n)
+
+
+def test_target_phase_is_validated_and_recorded(tmp_path):
+    from pba_autoworkflow.schema import CategoricalSpec
+    platform, _ = build_simulated_platform(seed=2, time_scale=0.0, failure_rate=0.0)
+    space = default_design_space()
+    no_zn = space.model_copy(update={"categorical": tuple(
+        c.model_copy(update={"choices": ("Mn", "Fe")}) if c.name == "metal" else c for c in space.categorical)})
+    with pytest.raises(ValueError, match="can form"):
+        Campaign(platform, ProvenanceStore(tmp_path / "a"),
+                 CampaignConfig(campaign_id="x", target_phase="znhcf_r3c"), space=no_zn)
+    with pytest.raises(ValueError, match="not one of"):
+        Campaign(platform, ProvenanceStore(tmp_path / "b"), CampaignConfig(campaign_id="y", target_phase="nacl"))
+    store = ProvenanceStore(tmp_path / "c")
+    cfg = CampaignConfig(campaign_id="zn", target_phase="znhcf_r3c", n_seed=4, batch_size=4, max_experiments=4, seed=2)
+    camp = Campaign(platform, store, cfg)
+    asyncio.run(camp.run(1))
+    done = [e for e in camp.history if e.objectives is not None]
+    assert done and all(e.metadata["target_phase"] == "znhcf_r3c" for e in done)
+    # resuming without naming a target keeps the recorded one; a different one is refused
+    again = Campaign(build_simulated_platform(seed=2, time_scale=0.0)[0], ProvenanceStore(tmp_path / "c"),
+                     CampaignConfig(campaign_id="zn"))
+    assert again.config.target_phase == "znhcf_r3c"
+    with pytest.raises(ValueError, match="target phase"):
+        Campaign(build_simulated_platform(seed=2, time_scale=0.0)[0], ProvenanceStore(tmp_path / "c"),
+                 CampaignConfig(campaign_id="zn", target_phase="pba_fm3m"))
+
+
+
+def test_zn_low_order_bias_is_bounded():
+    """Known limitation, pinned so a change in either direction is noticed.
+
+    In a poorly ordered cubic + R-3c Zn mixture the many weak R-3c lines absorb
+    intensity the cubic phase should get; the R-3c fraction reads high.
+    """
+    import copy
+    gt = GroundTruth(seed=1, reproducibility=0.0, failure_rate=0.0)
+    base = gt.latent(_zn(), np.random.default_rng(3))
+    base.domain_size_nm = 25.0
+    bias = {}
+    for order in (0.35, 0.7):
+        lat = copy.deepcopy(base); lat.crystallinity = order
+        truth = lat.xrd_weight_fractions()["znhcf_r3c"]
+        bias[order] = float(np.median([
+            analyze_pattern(simulate_xrd(lat, np.random.default_rng(10 + k)), "Zn")
+            .phase_fractions.get("znhcf_r3c", 0.0) - truth for k in range(4)]))
+    assert abs(bias[0.7]) < 0.08, bias
+    assert bias[0.35] < 0.30, bias

@@ -36,7 +36,7 @@ from typing import Callable, Sequence
 
 import numpy as np
 
-from .analysis.objectives import OBJECTIVE_NAMES, scalarize
+from .analysis.objectives import DEFAULT_TARGET_PHASE, OBJECTIVE_NAMES, scalarize
 from .devices.base import Platform
 from .optimize.planner import Planner, hypervolume, make_planner, pareto_mask
 from .clock import tick
@@ -67,6 +67,9 @@ class CampaignConfig:
     max_in_flight: int = 4
     reactor_capacity: int = 4
     per_experiment_timeout_s: float | None = None
+    #: framework phase to make (``pba_fm3m``, ``pba_p21n``, ``znhcf_r3c``).
+    #: None: the phase recorded for an existing campaign, else ``pba_fm3m``.
+    target_phase: str | None = None
 
     # Stopping and safety
     hv_convergence_tol: float = 5e-4
@@ -118,6 +121,7 @@ class Campaign:
         self.config = config or CampaignConfig()
         self.space = space or default_design_space()
         self.workflow_config = workflow_config or WorkflowConfig()
+        self._resolve_target_phase(store)
         self._progress = progress or (lambda msg: None)
 
         self.pool = StationPool(default_capacities(self.config.reactor_capacity))
@@ -136,6 +140,7 @@ class Campaign:
         )
 
         resumed = store.campaign_exists(self.config.campaign_id)
+
         if not resumed:
             store.create_campaign(
                 self.config.campaign_id, self.config.as_dict(),
@@ -161,6 +166,25 @@ class Campaign:
             self._progress(
                 f"resumed {self.config.campaign_id} with {len(self.history)} experiments"
             )
+
+    def _resolve_target_phase(self, store: ProvenanceStore) -> None:
+        from .analysis.phases import CANDIDATES, FRAMEWORK_PHASES
+
+        stored = store.campaign_config(self.config.campaign_id) or {}
+        recorded = stored.get("target_phase")
+        if recorded and self.config.target_phase and self.config.target_phase != recorded:
+            raise ValueError(
+                f"campaign {self.config.campaign_id!r} was scored for target phase "
+                f"{recorded!r}, not {self.config.target_phase!r}; pass the same target "
+                "phase (or none) or start a new campaign id")
+        target = self.config.target_phase or recorded or DEFAULT_TARGET_PHASE
+        if target not in FRAMEWORK_PHASES:
+            raise ValueError(f"target phase {target!r} is not one of {FRAMEWORK_PHASES}")
+        metals = next((c.choices for c in self.space.categorical if c.name == "metal"), ())
+        if not any(k.split("/")[0] == target for m in metals for k in CANDIDATES.get(m, ())):
+            raise ValueError(f"no metal in the design space {tuple(metals)} can form {target!r}")
+        self.config.target_phase = target
+        self.workflow_config.target_phase = target
 
     # ------------------------------------------------------------------ #
     # Views over the history

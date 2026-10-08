@@ -22,12 +22,12 @@ elemental        ICP digest of the solid (+ C analysis)
 
 ## Design space
 
-The default space (`schema.default_design_space()`) has nine continuous parameters and one
-categorical choice.
+The default space (`schema.default_design_space()`) has ten continuous parameters and two
+categorical choices.
 
 | Parameter | Range | Scale | Meaning |
 |---|---|---|---|
-| `metal` | Mn, Fe, Co, Ni, Cu | categorical | Divalent metal on the N-coordinated site |
+| `metal` | Mn, Fe, Co, Ni, Cu, Zn | categorical | Divalent metal on the N-coordinated site |
 | `c_metal_M` | 0.01–0.3 mol/L | log | M(II) sulfate/chloride in solution A |
 | `c_hcf_M` | 0.01–0.3 mol/L | log | Na₄[Fe(CN)₆] in solution B |
 | `c_nacl_M` | 0–3.5 mol/L | linear | Supporting NaCl; sets the Na⁺ activity |
@@ -37,6 +37,13 @@ categorical choice.
 | `addition_rate_mL_min` | 0.05–20 mL/min | log | Metering rate of B into A |
 | `aging_time_h` | 0.5–24 h | log | Post-addition ageing |
 | `stir_rate_rpm` | 200–1200 rpm | linear | Stirrer set-point |
+| `dry_temperature_C` | 25–120 °C | linear | Drying temperature of the washed solid |
+| `dry_atmosphere` | air, vacuum | categorical | Drying in ambient air or under dynamic vacuum |
+
+Drying is part of the recipe because dehydration can change the polymorph: cubic zinc
+hexacyanoferrate is reported to convert to the R-3c phase on drying at about 70 °C, which was the
+platform's earlier fixed drying temperature. Lower water partial pressure (vacuum) lowers the
+temperature of that conversion.
 
 Log-scaled parameters are searched uniformly in their logarithm. To change ranges or metals, see
 chapter 4. Before a batch runs, the platform checks each recipe against physical limits (for
@@ -46,41 +53,104 @@ example, stock solubility); `dry-run` shows these warnings.
 
 | Instrument | Raw data | Descriptors |
 |---|---|---|
-| XRD | 2θ pattern | Phase purity; number of impurity peaks; crystallinity index; cubic lattice constant *a*; coherent domain size and microstrain (Williamson–Hall, falling back to Scherrer); FWHM of (200); phase (cubic, rhombohedral, …); number of indexed reflections; indexing residual |
+| XRD | 2θ pattern | Weight fraction and refined cell of each crystalline phase; unidentified intensity share; dominant framework phase; crystallinity index; cubic lattice constant *a*; coherent domain size and microstrain (Williamson–Hall, falling back to Scherrer); FWHM of the strongest framework line |
 | ICP + C | Element concentrations, dry mass | Na per formula unit; Fe/M ratio; vacancy fraction *y*; water content; formula |
 | Balance | Dry mass | Isolated yield |
 
-The XRD pipeline is: SNIP background subtraction, Savitzky–Golay-smoothed peak search,
-pseudo-Voigt fits, and cubic indexing. Indexing uses a truncated loss, so a peak from a secondary
-phase costs a fixed penalty instead of pulling the lattice constant towards a wrong solution.
+The XRD pipeline is: SNIP background subtraction, Savitzky–Golay-smoothed peak search and
+pseudo-Voigt peak fits, followed by **whole-pattern phase quantification** against a library of
+reference structures (`pba_autoworkflow/analysis/phases.py`).
 
-After indexing, each fitted peak is attributed either to the PBA (within 0.45° of an allowed
-reflection at the refined *a*, or within 0.55° of an indexed one, which covers split components)
-or to an unidentified secondary phase.
+**Reference phases.** The candidates depend on the recipe's metal:
 
-- **Phase purity** = PBA Bragg intensity ÷ all Bragg intensity. It is an *intensity* fraction,
-  not a weight fraction; converting it would need reference intensity ratios for each impurity.
-  It is an upper bound, because an impurity line that coincides with a PBA reflection is counted
-  as PBA.
-- **Crystallinity index** = PBA Bragg intensity ÷ (PBA Bragg intensity + amorphous halo). The
-  halo is recovered by fitting the SNIP background with a constant, an exponential (air and
-  low-angle scatter) and a Gaussian held near the (200) position. Impurity peaks are left out, so
-  a crystalline impurity cannot raise it. On the simulated deck it ranks samples correctly
-  (correlation 0.98 with the true ordered fraction) but reads about 0.15 low, because part of the
-  halo is absorbed by the exponential term. Treat it as a relative measure.
+| Metal | Framework phases | Secondary phases |
+|---|---|---|
+| Mn, Fe | cubic Fm-3m; monoclinic P2₁/n (Na-rich, "Prussian white" type) | NaCl; M(OH)₂ |
+| Co, Ni | cubic Fm-3m | NaCl; M(OH)₂ |
+| Cu | cubic Fm-3m | NaCl; CuO |
+| Zn | cubic Fm-3m; rhombohedral R-3c Na₂Zn₃[Fe(CN)₆]₂ | NaCl; ZnO |
 
-Rhombohedral or monoclinic distortion is reported only when several of the reflections it should
-split appear as doublets. A single impurity line next to a PBA reflection is not counted. On the
-simulated deck the small rhombohedral split (0.16° 2θ) is not resolved by the peak search, so
-distorted samples are currently reported as cubic. The distortion label is therefore not reliable
-yet and is not used as an objective.
+The library (`pba_autoworkflow/data/phase_library.json`) stores each phase's reflections as
+multiplicity × |F|², computed from structures in the Crystallography Open Database by
+`scripts/build_phase_library.py`; the COD numbers are in [REFERENCES.md](../../REFERENCES.md).
+Two of the entries are approximations. The cubic Mn–Cu frameworks are an idealised model
+(Na 1 per formula unit, *y* = 0.1) at the reference lattice constant. The cubic Zn entry is the
+refined structure of zinc hexacyanoferrate(**III**), Zn₃[Fe(CN)₆]₂, so its line positions are right
+but its intensities omit the Na⁺ of the Fe(II) compound the platform makes.
 
-The campaign targets **phase formation** and maximises two objectives from the XRD pattern:
+**Quantification**, for each candidate:
+
+1. Refine the lattice within a few percent of the reference cell against the fitted peak positions:
+   one scale for cubic and monoclinic cells, separate *a* and *c* for trigonal and hexagonal ones.
+2. Synthesise its pattern from |F|² × Lorentz-polarisation with a pseudo-Voigt profile whose width
+   follows its own domain size.
+3. Fit the background-stripped pattern as a non-negative sum of all phase patterns, plus a free
+   peak for every line no phase explains.
+4. Convert the scale factors to **weight fractions** with the Hill–Howard relation,
+   *w*ₚ ∝ *S*ₚ (*ZMV*)ₚ.
+
+A phase is kept only if the pattern needs it. Either at least two of its strong lines are observed
+where no other phase can explain them, or, for a framework phase, its own strongest line is (a minor
+cubic Zn phase next to R-3c has only its (200) line clear of the dense R-3c pattern), or the
+whole-pattern fit becomes clearly worse without it.
+Without this test, a low-symmetry phase whose many lines lie close to cubic reflections absorbs
+intensity mismatch and is reported although it isn't there.
+
+Descriptors from this step:
+
+- **`phase_fractions`**: weight fraction of each identified crystalline phase, summing to 1 over
+  the crystalline material. The amorphous share is not included; it is reported as crystallinity.
+- **`phase_lattice`**: refined cell of each identified phase.
+- **`unidentified_fraction`**: share of the Bragg intensity in peaks no library phase explains.
+- **`phase`**: the dominant framework phase, or `amorphous`.
+- **Crystallinity index**: framework Bragg intensity ÷ (framework Bragg intensity + amorphous
+  halo). The halo is recovered by fitting the SNIP background with a constant, an exponential and a
+  Gaussian held near the strongest low-angle line of the dominant framework phase. On the
+  simulated deck it ranks samples correctly (correlation 0.97 with the true ordered fraction) but
+  reads about 0.15 low. Treat it as a relative measure.
+
+**Accuracy on the simulated deck** (234 random recipes over all six metals and both drying
+atmospheres; median and 90th-percentile absolute error of the weight fraction):
+
+| Phase | Median | 90th percentile |
+|---|---|---|
+| cubic Fm-3m | 0.012 | 0.081 |
+| rhombohedral R-3c (Zn) | 0.024 | 0.130 |
+| NaCl | 0.015 | 0.062 |
+| M(OH)₂, CuO, ZnO | 0.03–0.04 | 0.06–0.12 |
+| monoclinic P2₁/n (Mn, Fe) | 0.095 | 0.447 |
+
+The cubic lattice constant is recovered to 0.0002 Å (median). For R-3c-dominant zinc samples the
+median error is 0.007 Å in *a* (12.47 Å) and 0.03 Å in *c* (32.9 Å).
+
+**Known limitations.**
+
+- **Cubic + monoclinic Mn/Fe mixtures are not quantified reliably** (median error about 0.17 in
+  the monoclinic fraction for mixed samples). The monoclinic doublets are 0.1–0.2° apart and
+  merge with the cubic line. Pure samples of either phase are identified correctly. Separating
+  mixtures needs a full Rietveld refinement.
+- **Poorly ordered Zn mixtures over-report R-3c.** At an ordered fraction of 0.7 the bias is
+  +0.04; at 0.5 it is +0.06 to +0.13; at 0.35 or below it is +0.17 to +0.36. The many weak R-3c
+  lines take up intensity the cubic phase should get. The crystallinity objective works against
+  this in the Pareto front, but a campaign targeting R-3c should check its best low-crystallinity
+  results by hand.
+- **Unknown phases** appear only as `unidentified_fraction`. Their weight cannot be estimated
+  without a structure, so the target-phase objective is discounted by their intensity share instead.
+- Intensities come from fixed reference structures. Preferred orientation, microabsorption and
+  Na/water occupancy are not refined.
+
+Each campaign has one **target phase**: `pba_fm3m` (default), `pba_p21n` or `znhcf_r3c`. Set it
+with `CampaignConfig(target_phase=…)` or `--target-phase`. It is stored with the campaign; resuming
+without naming one keeps it, and naming a different one is refused. The campaign maximises two
+objectives from the XRD pattern:
 
 | Objective | Definition | Why |
 |---|---|---|
-| `phase_purity` | XRD phase purity (above) | Secondary phases (NaCl residue, M(OH)₂ or CuO at high pH, unreacted salts) mean the recipe did not form a single-phase PBA |
+| `target_phase_fraction` | Weight fraction of the target phase in the crystalline product × (1 − unidentified intensity share) | Polymorph and secondary-phase selectivity: other framework polymorphs, NaCl residue and hydroxides/oxides all count against it |
 | `crystallinity` | XRD crystallinity index (above) | Separates well-ordered frameworks from poorly ordered or amorphous precipitates |
+
+The target phase must be one some metal in the design space can form. For example, `znhcf_r3c`
+needs Zn among the allowed metals, and a campaign is refused otherwise.
 
 A run with no usable pattern scores 0 on both. The ICP composition is still measured and
 recorded: it gives the formula used for the isolated yield, and feeds the charge-balance checks

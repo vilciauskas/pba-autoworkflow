@@ -17,8 +17,11 @@ instrument, without an operator:
    after deconvoluting the instrumental broadening, using a Williamson-Hall style
    linear fit when enough reflections are available so that microstrain does not
    contaminate the size estimate.
-6. Classify the phase from the presence of distortion-induced splitting and from
-   the crystalline fraction.
+6. Identify and quantify the crystalline phases -- framework polymorphs and
+   secondary phases -- against the reference library by whole-pattern fitting
+   (:mod:`pba_autoworkflow.analysis.phases`), giving weight fractions, refined
+   lattices, and the intensity no library phase explains.
+7. Crystallinity: framework Bragg intensity against Bragg plus amorphous halo.
 
 Everything here operates on the array pair alone, so it works identically on
 simulated and real patterns.
@@ -34,6 +37,7 @@ from scipy.optimize import curve_fit, least_squares
 from scipy.signal import find_peaks, savgol_filter
 
 from ..schema import XRDDescriptors, XRDPattern
+from .phases import QuantResult, quantify_phases
 
 #: Instrumental FWHM (deg) used to deconvolute the observed broadening.  On a
 #: real platform this comes from a LaB6 or Si standard measured in the same
@@ -142,24 +146,23 @@ def _fit_peak(tt: np.ndarray, y: np.ndarray, idx: int, half_width_pts: int
     return FittedPeak(centre, fwhm, amp, eta, area)
 
 
-def amorphous_halo_area(pattern: XRDPattern, lattice_a_A: float | None = None) -> float:
+def amorphous_halo_area(pattern: XRDPattern, centre_deg: float | None = None) -> float:
     """Integrated intensity of the broad amorphous halo.
 
     SNIP (window ~1 deg) keeps the Bragg peaks but strips the halo (sigma ~5 deg)
     into its background, so the halo is recovered from that background curve by
     fitting ``c0 + c1 exp(-(2theta - 2theta_0)/L) + Gaussian``: a flat term for
     fluorescence/detector floor, an exponential for air and low-angle scatter,
-    and the halo.  The halo is held near the (200) position of the refined
-    lattice (+/- 2 deg; 14-24 deg when the pattern did not index) and to a width
+    and the halo.  The halo is held within +/- 2 deg of ``centre_deg`` (the
+    strongest low-angle line of the dominant framework phase; 14-24 deg when no
+    phase was identified) and to a width
     of 3-8 deg -- left free, a wide Gaussian at the low-angle edge imitates the
     air-scatter exponential and inflates the halo several-fold.  This is a
     profile model, so its numbers are only as good as that assumption for the
     instrument at hand.
     """
-    if lattice_a_A is not None and math.isfinite(lattice_a_A):
-        ratio = pattern.wavelength_A / lattice_a_A          # d(200) = a / 2
-        c = 2.0 * math.degrees(math.asin(min(ratio, 0.999)))
-        centre_bounds = (c - 2.0, c + 2.0)
+    if centre_deg is not None and math.isfinite(centre_deg):
+        centre_bounds = (centre_deg - 2.0, centre_deg + 2.0)
     else:
         centre_bounds = (14.0, 24.0)
     tt = np.asarray(pattern.two_theta_deg, dtype=float)
@@ -335,112 +338,97 @@ def scherrer_domain_size_nm(peaks_by_m: dict[int, FittedPeak], wavelength_A: flo
     return float(K * lam_nm / (b * max(math.cos(th), 1e-3))), 0.0
 
 
-def classify_phase(peaks: list[FittedPeak], assign: dict[int, FittedPeak],
-                   crystallinity: float) -> str:
-    """Cubic vs distorted vs amorphous, from splitting of the odd-parity lines."""
-    if crystallinity < 0.18 or len(assign) < 2:
-        return "amorphous"
-    # Look for doublets: two fitted peaks close together straddling an indexed one.
-    splits: list[float] = []
-    for m, ref in assign.items():
-        if m % 16 == 0:  # (400), (440) etc. are unsplit by the distortion
-            continue
-        near = [p for p in peaks if abs(p.two_theta_deg - ref.two_theta_deg) < 0.55
-                and p is not ref]
-        if near:
-            partner = min(near, key=lambda p: abs(p.two_theta_deg - ref.two_theta_deg))
-            splits.append(abs(partner.two_theta_deg - ref.two_theta_deg))
-    # A distortion splits the affected reflections systematically; a secondary
-    # phase line that happens to sit next to one or two PBA reflections does not.
-    eligible = sum(1 for m in assign if m % 16 != 0)
-    if len(splits) < 2 or len(splits) < 0.4 * eligible:
-        return "cubic"
-    mean_split = float(np.mean(splits))
-    if mean_split > 0.24:
-        return "monoclinic"
-    return "rhombohedral"
+#: Below this crystallinity index the sample is reported as amorphous.
+AMORPHOUS_CRYSTALLINITY = 0.18
 
 
-#: A fitted peak belongs to the PBA if it lies this close to an allowed cubic
-#: reflection at the refined lattice constant...
-PBA_LINE_TOL_DEG = 0.45
-#: ...or this close to an indexed reflection (a component of a rhombohedral or
-#: monoclinic split; same window :func:`classify_phase` uses).
-SPLIT_PARTNER_TOL_DEG = 0.55
+def _strongest_low_angle_line(r) -> float | None:
+    m = r.lines_tt <= 30.0
+    return float(r.lines_tt[m][int(np.argmax(r.lines_I[m]))]) if m.any() else None
 
 
-def attribute_peaks(peaks: list[FittedPeak], a: float, assign: dict[int, FittedPeak],
-                    wavelength_A: float) -> tuple[list[FittedPeak], list[FittedPeak]]:
-    """Split fitted peaks into PBA reflections and unindexed (impurity) lines.
+def analyze_pattern(pattern: XRDPattern, metal: str | None = None,
+                    quant: "QuantResult | None" = None) -> XRDDescriptors:
+    """Full reduction of one diffractogram to structural descriptors.
 
-    An impurity line that happens to coincide with a PBA reflection is counted
-    as PBA, so phase purity is an upper bound; secondary phases whose strong
-    lines all overlap the framework pattern are not detectable this way.
+    ``metal`` selects the candidate phases (see
+    :data:`pba_autoworkflow.analysis.phases.CANDIDATES`); without it every
+    library phase is tried.
     """
-    ratio = wavelength_A / (2.0 * a / np.sqrt(_ALLOWED_M))
-    calc = 2.0 * np.degrees(np.arcsin(ratio[ratio < 1.0]))
-    indexed = [p.two_theta_deg for p in assign.values()]
-    pba, impurity = [], []
-    for p in peaks:
-        near_line = calc.size and float(np.min(np.abs(calc - p.two_theta_deg))) < PBA_LINE_TOL_DEG
-        near_indexed = any(abs(p.two_theta_deg - t) < SPLIT_PARTNER_TOL_DEG for t in indexed)
-        (pba if near_line or near_indexed else impurity).append(p)
-    return pba, impurity
-
-
-def analyze_pattern(pattern: XRDPattern) -> XRDDescriptors:
-    """Full reduction of one diffractogram to structural descriptors."""
     peaks, tt, y = find_and_fit_peaks(pattern)
-    a, assign, rms = index_cubic(peaks, pattern.wavelength_A)
-    halo = amorphous_halo_area(pattern, a if assign else None)
-    if not assign:
+    if quant is None:
+        quant = quantify_phases(tt, y, peaks, pattern.wavelength_A, metal) if peaks else None
+    phases = quant.phases if quant is not None else []
+    framework = [r for r in phases if r.framework]
+    dominant = max(framework, key=lambda r: r.weight_fraction, default=None)
+
+    halo = amorphous_halo_area(pattern, centre_deg=_strongest_low_angle_line(dominant)
+                               if dominant is not None else None)
+    fw_bragg = float(sum(r.bragg_area for r in framework))
+    crystallinity = fw_bragg / (fw_bragg + halo) if fw_bragg + halo > 0 else 0.0
+    fractions = {}
+    for r in phases:
+        fractions[r.phase_id] = fractions.get(r.phase_id, 0.0) + round(r.weight_fraction, 5)
+    common = dict(
+        phase_fractions=fractions,
+        phase_lattice={r.phase_id: [round(v, 5) for v in r.lattice] for r in phases},
+        unidentified_fraction=float(np.clip(quant.unidentified_fraction, 0, 1)) if quant else 0.0,
+        n_unidentified_peaks=len(quant.unidentified_peaks) if quant else len(peaks),
+    )
+    if dominant is None or dominant.n_matched < 2:
         peak_area = float(sum(p.area for p in peaks))
         return XRDDescriptors(
             lattice_a_A=float("nan"), domain_size_nm=float("nan"),
             crystallinity_index=float(peak_area / (peak_area + halo)) if peak_area + halo > 0 else 0.0,
-            fwhm_200_deg=float("nan"), phase="amorphous", n_peaks_indexed=0,
-            fit_residual=float("inf"), phase_purity=0.0, n_impurity_peaks=len(peaks),
+            fwhm_200_deg=float("nan"), phase="amorphous",
+            n_peaks_indexed=dominant.n_matched if dominant else 0,
+            fit_residual=float("inf"), **common,
         )
-    pba, impurity = attribute_peaks(peaks, a, assign, pattern.wavelength_A)
-    pba_area = float(sum(p.area for p in pba))
-    imp_area = float(sum(p.area for p in impurity))
-    purity = pba_area / (pba_area + imp_area) if pba_area + imp_area > 0 else 0.0
-    # Crystallinity of the PBA itself: its Bragg intensity against Bragg plus
-    # amorphous halo.  Impurity lines are left out, so a crystalline secondary
-    # phase cannot raise it.
-    crystallinity = pba_area / (pba_area + halo) if pba_area + halo > 0 else 0.0
-    d_nm, _strain = scherrer_domain_size_nm(assign, pattern.wavelength_A)
-    fwhm_200 = assign[4].fwhm_deg if 4 in assign else min(
-        assign.values(), key=lambda p: p.two_theta_deg
-    ).fwhm_deg
-    phase = classify_phase(peaks, assign, crystallinity)
+
+    cubic = next((r for r in framework if r.phase_id == "pba_fm3m"), None)
+    lattice_a = float(cubic.lattice[0]) if cubic is not None and cubic.n_matched >= 2 else float("nan")
+    if dominant.phase_id == "pba_fm3m":
+        by_m = {}
+        for hkl, _t, pk in dominant.matched:
+            m = int(sum(v * v for v in hkl))
+            if m not in by_m or pk.area > by_m[m].area:
+                by_m[m] = pk
+        d_nm, _strain = scherrer_domain_size_nm(by_m, pattern.wavelength_A)
+        fwhm_200 = by_m[4].fwhm_deg if 4 in by_m else min(
+            by_m.values(), key=lambda p: p.two_theta_deg).fwhm_deg
+    else:
+        d_nm = dominant.domain_nm
+        fwhm_200 = max((m[2] for m in dominant.matched), key=lambda p: p.area).fwhm_deg
+    phase = dominant.phase_id if crystallinity >= AMORPHOUS_CRYSTALLINITY else "amorphous"
     return XRDDescriptors(
-        lattice_a_A=float(a),
+        lattice_a_A=lattice_a,
         domain_size_nm=float(d_nm),
-        crystallinity_index=crystallinity,
+        crystallinity_index=float(np.clip(crystallinity, 0.0, 1.0)),
         fwhm_200_deg=float(fwhm_200),
-        phase=phase,  # type: ignore[arg-type]
-        n_peaks_indexed=len(assign),
-        fit_residual=float(rms),
-        phase_purity=float(np.clip(purity, 0.0, 1.0)),
-        n_impurity_peaks=len(impurity),
+        phase=phase,
+        n_peaks_indexed=dominant.n_matched,
+        fit_residual=float(dominant.rms_deg),
+        **common,
     )
 
 
-def indexed_reflection_table(pattern: XRDPattern) -> list[dict[str, float | str]]:
-    """Per-reflection detail, for the QC report."""
-    peaks, _, _ = find_and_fit_peaks(pattern)
-    a, assign, _ = index_cubic(peaks, pattern.wavelength_A)
+def indexed_reflection_table(pattern: XRDPattern, metal: str | None = None
+                             ) -> list[dict[str, float | str]]:
+    """Per-reflection detail of every identified phase, for the QC report."""
+    peaks, tt, y = find_and_fit_peaks(pattern)
+    if not peaks:
+        return []
+    quant = quantify_phases(tt, y, peaks, pattern.wavelength_A, metal)
     rows: list[dict[str, float | str]] = []
-    for m in sorted(assign):
-        p = assign[m]
-        d_obs = pattern.wavelength_A / (2.0 * math.sin(math.radians(p.two_theta_deg / 2)))
-        rows.append({
-            "hkl": _HKL_LABELS.get(m, str(m)),
-            "two_theta_obs": round(p.two_theta_deg, 4),
-            "d_obs_A": round(d_obs, 5),
-            "d_calc_A": round(a / math.sqrt(m), 5),
-            "fwhm_deg": round(p.fwhm_deg, 4),
-            "area": round(p.area, 1),
-        })
+    for r in quant.phases:
+        for hkl, t_calc, p in sorted(r.matched, key=lambda m: m[1]):
+            rows.append({
+                "phase": r.phase_id,
+                "hkl": "".join(str(abs(v)) if v >= 0 else f"-{abs(v)}" for v in hkl),
+                "two_theta_obs": round(p.two_theta_deg, 4),
+                "two_theta_calc": round(t_calc, 4),
+                "d_obs_A": round(pattern.wavelength_A / (2.0 * math.sin(math.radians(p.two_theta_deg / 2))), 5),
+                "fwhm_deg": round(p.fwhm_deg, 4),
+                "area": round(p.area, 1),
+            })
     return rows

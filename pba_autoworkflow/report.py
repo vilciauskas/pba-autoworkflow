@@ -182,8 +182,15 @@ def plot_campaign(campaign: Campaign, path: str | Path):
     return out
 
 
+_PHASE_COLOURS = ("#3b6ea5", "#d98c1f", "#2a6f4e", "#8e3b8e", "#7f7f7f")
+
+
 def plot_best_pattern(campaign: Campaign, path: str | Path):
-    """Diffractogram of the best sample: indexed PBA reflections and unindexed lines marked."""
+    """Diffractogram of the best sample with the whole-pattern phase fit.
+
+    Each identified phase is drawn as its tick marks, with its weight fraction
+    in the legend; peaks no library phase explains are marked separately.
+    """
     import matplotlib
 
     matplotlib.use("Agg")
@@ -192,63 +199,56 @@ def plot_best_pattern(campaign: Campaign, path: str | Path):
     best = campaign.best_experiment()
     if best is None or "xrd" not in best.raw_refs:
         return None
-    # Reflection labels come from the indexer's own table, never a local copy --
-    # a second hand-maintained mapping is how a figure ends up labelled
-    # inconsistently with the reflection table in the same report.
-    from .analysis.xrd import (
-        _HKL_LABELS as labels,
-        attribute_peaks,
-        find_and_fit_peaks,
-        index_cubic,
-        snip_background,
-    )
+    from .analysis.phases import quantify_phases
+    from .analysis.xrd import find_and_fit_peaks, snip_background
     from .schema import XRDPattern
 
     arr = campaign.store.load_trace(best.raw_refs["xrd"])
     pattern = XRDPattern(arr["two_theta_deg"], arr["intensity"])
     peaks, tt, stripped = find_and_fit_peaks(pattern)
-    a, assign, _ = index_cubic(peaks, pattern.wavelength_A)
+    quant = quantify_phases(tt, stripped, peaks, pattern.wavelength_A, best.parameters.metal)
+    bg = snip_background(np.asarray(pattern.intensity, float))
 
     fig, (ax, ax_r) = plt.subplots(
-        2, 1, figsize=(9.0, 6.0), sharex=True,
-        gridspec_kw={"height_ratios": [3.0, 1.0]}, constrained_layout=True,
+        2, 1, figsize=(9.0, 6.4), sharex=True,
+        gridspec_kw={"height_ratios": [3.0, 1.4]}, constrained_layout=True,
     )
-    ax.plot(pattern.two_theta_deg, pattern.intensity, color="0.25", lw=0.8,
-            label="measured")
-    ax.plot(tt, snip_background(np.asarray(pattern.intensity, float)),
-            color="#c1272d", lw=1.0, ls="--", label="fitted background")
-    for m, p in sorted(assign.items()):
-        ax.axvline(p.two_theta_deg, color="#3b6ea5", lw=0.7, alpha=0.5)
-        ax.annotate(labels.get(m, str(m)), xy=(p.two_theta_deg, ax.get_ylim()[1]),
-                    xytext=(0, -12), textcoords="offset points", fontsize=7,
-                    ha="center", color="#1f4e79")
-    impurity = attribute_peaks(peaks, a, assign, pattern.wavelength_A)[1] if assign else []
-    if impurity:
-        top = max(p.amplitude for p in peaks)
-        ax.plot([p.two_theta_deg for p in impurity],
-                [np.interp(p.two_theta_deg, tt, np.asarray(pattern.intensity, float)) + 0.04 * top
-                 for p in impurity],
-                ls="none", marker="v", ms=5, color="#d98c1f",
-                label="unindexed (secondary phase)")
+    ax.plot(pattern.two_theta_deg, pattern.intensity, color="0.25", lw=0.8, label="measured")
+    ax.plot(tt, bg, color="#c1272d", lw=1.0, ls="--", label="fitted background")
+    ax.plot(tt, bg + quant.model, color="#e3a21a", lw=0.9, alpha=0.9, label="phase fit")
+
+    ax_r.plot(tt, stripped, color="0.35", lw=0.8)
+    ax_r.axhline(0.0, color="0.6", lw=0.7)
+    top = float(np.max(stripped)) if stripped.size else 1.0
+    for n, r in enumerate(quant.phases):
+        c = _PHASE_COLOURS[n % len(_PHASE_COLOURS)]
+        strong = r.lines_I > 0.02 * r.lines_I.max()
+        y0 = -0.08 * top * (n + 1)
+        ax_r.plot(r.lines_tt[strong], np.full(strong.sum(), y0), ls="none", marker="|",
+                  ms=8, color=c, label=f"{r.label}: {r.weight_fraction:.2f}")
+    if quant.unidentified_peaks:
+        ax_r.plot([q.two_theta_deg for q in quant.unidentified_peaks],
+                  [q.amplitude * 1.08 for q in quant.unidentified_peaks],
+                  ls="none", marker="v", ms=5, color="#c1272d", label="unidentified")
+    ax_r.legend(fontsize=7, frameon=False, loc="upper right", title="weight fraction",
+                title_fontsize=7)
+
     comp = best.descriptors.composition
     d = best.descriptors.xrd
-    purity = (f", phase purity {d.phase_purity:.2f}"
-              if d is not None and d.phase_purity is not None else "")
-    subtitle = (f"{comp.formula if comp else '?'} — "
-                f"a = {a:.4f} Å, D = {d.domain_size_nm:.0f} nm, "
-                f"{d.phase}{purity}" if d else "")
+    target = (best.metadata or {}).get("target_phase", "")
+    tf = best.objectives.values.get("target_phase_fraction") if best.objectives else None
+    subtitle = (f"{comp.formula if comp else '?'} — {d.phase}, crystallinity "
+                f"{d.crystallinity_index:.2f}"
+                + (f", target {target} {tf:.2f}" if tf is not None else "")) if d else ""
     ax.set_ylabel("intensity (counts)")
-    ax.set_title(f"Best sample: {best.experiment_id}\n{subtitle}",
-                 loc="left", fontsize=11)
+    ax.set_title(f"Best sample: {best.experiment_id}\n{subtitle}", loc="left", fontsize=11)
     ax.legend(fontsize=8, frameon=False)
-
-    ax_r.plot(tt, stripped, color="#2a6f4e", lw=0.8)
-    ax_r.axhline(0.0, color="0.6", lw=0.7)
     ax_r.set_xlabel("2θ (degrees, Cu Kα)")
     ax_r.set_ylabel("background-\nstripped")
 
     out = Path(path)
     fig.savefig(out, dpi=180)
+    plt.close(fig)
     return out
 
 

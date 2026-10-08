@@ -38,7 +38,7 @@ def _exp(metal, y, na, a=10.2, yield_=0.6):
                            phase="cubic", n_peaks_indexed=8, fit_residual=0.05),
         isolated_yield=yield_)
     e.objectives = Objectives(
-        values={"phase_purity": na / 2.0, "crystallinity": 1.0 - y},
+        values={"target_phase_fraction": na / 2.0, "crystallinity": 1.0 - y},
         constraints={"isolated_yield": yield_}, feasible=True)
     return e
 
@@ -110,7 +110,7 @@ def test_advisor_catches_a_prior_that_ranks_backwards():
         obj = 1.0 - prior.stability_score("Mn", y)
         e = _exp("Mn", y, charge_balanced_na(y))
         e.objectives = Objectives(
-            values={"phase_purity": obj, "crystallinity": obj},
+            values={"target_phase_fraction": obj, "crystallinity": obj},
             constraints={"isolated_yield": 0.6}, feasible=True)
         exps.append(e)
     adv = ThermoAdvisor(prior).review(exps)

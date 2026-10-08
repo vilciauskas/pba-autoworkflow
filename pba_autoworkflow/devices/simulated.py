@@ -318,7 +318,8 @@ class SimulatedWorkup(_SimDevice):
         return solid
 
     async def dry(self, solid: VesselHandle, temperature_C: float = 70.0,
-                  duration_s: float = 3600.0) -> VesselHandle:
+                  duration_s: float = 3600.0, vacuum: bool = False) -> VesselHandle:
+        # The latent state already reflects the recipe's drying conditions.
         self._require_ready()
         await self.backend.dwell(duration_s, self.device_id, f"dry:{solid.vessel_id}")
         return solid

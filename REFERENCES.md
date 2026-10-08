@@ -62,7 +62,22 @@ the project logo are credited in [`docs/logo/README.md`](docs/logo/README.md), n
 - **Scherrer equation** — Scherrer, P. (1918). Bestimmung der Größe und der inneren Struktur von Kolloidteilchen mittels Röntgenstrahlen. *Nachr. Ges. Wiss. Göttingen, Math.-Phys. Kl.* 1918, 98–100.
   - Patterson (1939). The Scherrer Formula for X-Ray Particle Size Determination. *Physical Review* **56**, 978-982. https://doi.org/10.1103/PhysRev.56.978
 - **Williamson–Hall analysis (domain size and microstrain)** — Williamson, Hall (1953). X-ray line broadening from filed aluminium and wolfram. *Acta Metallurgica* **1**, 22-31. https://doi.org/10.1016/0001-6160(53)90006-6
+- **Quantitative phase analysis from Rietveld scale factors (Hill–Howard relation)** — Hill, Howard (1987). Quantitative phase analysis from neutron powder diffraction data using the Rietveld method. *Journal of Applied Crystallography* **20**, 467-474. https://doi.org/10.1107/S0021889887086199
 - **Spearman rank correlation (force-field validation)** — Spearman (1904). The Proof and Measurement of Association between Two Things. *The American Journal of Psychology* **15**, 72. https://doi.org/10.2307/1412159
+
+## Reference crystal structures (`pba_autoworkflow/data/phases`)
+
+Taken from the Crystallography Open Database (COD; Gražulis *et al.* (2012). Crystallography Open Database (COD): an open-access collection of crystal structures and platform for world-wide collaboration. *Nucleic Acids Research* **40**, D420-D427. https://doi.org/10.1093/nar/gkr900). COD data are in the public domain.
+
+- **Cubic Zn₃[Fe(CN)₆]₂·xH₂O (Fm-3m), COD 2020370** — Gravereau, Garnier (1984). Structure de la phase cubique de l'hexacyanoferrate(III) de zinc: Zn₃[Fe(CN)₆]₂·nH₂O. *Acta Crystallographica C* **40**, 1306-1309. https://doi.org/10.1107/S0108270184007757
+- **Rhombohedral Na₂Zn₃[Fe(CN)₆]₂·xH₂O (R-3c), COD 2106959** — Garnier, Gravereau, Hardy (1982). Zeolitic iron cyanides: the structure of Na₂Zn₃[Fe(CN)₆]₂(H₂O)ₓ. *Acta Crystallographica B* **38**, 1401. (No DOI registered with Crossref.)
+- **Monoclinic Na₂Mn[Fe(CN)₆]·2H₂O (P2₁/n), COD 7047887** — Oliver-Tolentino, Osiry *et al.* (2018). Electronic density distribution of Mn–N bonds by a tuning effect through partial replacement of Mn by Ni in sodium manganese hexacyanoferrate. *Dalton Transactions* **47**, 16492-16501. https://doi.org/10.1039/C8DT03595D
+- **NaCl, COD 9003308** — Walker, Verma, Cranswick *et al.* (2004). Halite-sylvite thermoelasticity. *American Mineralogist* **89**, 204-210. https://doi.org/10.2138/am-2004-0124
+- **Co(OH)₂ and Ni(OH)₂, COD 1548810 and 1548811** — Zhao, Kulik (2018). *Journal of Chemical Theory and Computation* **14**, 670. https://doi.org/10.1021/acs.jctc.7b01061
+- **Mn(OH)₂ and Fe(OH)₂, COD 9009111 and 9009104** — Wyckoff, R. W. G. (1963). *Crystal Structures*, vol. 1, 2nd ed., p. 239. Interscience, New York.
+- **CuO (tenorite), COD 7212242** — Volanti, Orlandi *et al.* (2010). *CrystEngComm* **12**, 1696. https://doi.org/10.1039/B922978G
+- **ZnO (zincite), COD 2300450** — Schreyer, Guo *et al.* (2014). *Journal of Applied Crystallography* **47**, 659. https://doi.org/10.1107/S1600576714003379
+- **pymatgen (structure factors when building the library; not needed at runtime)** — Ong, Richards, Jain *et al.* (2013). Python Materials Genomics (pymatgen): A robust, open-source python library for materials analysis. *Computational Materials Science* **68**, 314-319. https://doi.org/10.1016/j.commatsci.2012.10.028
 
 ## Scientific Python stack
 

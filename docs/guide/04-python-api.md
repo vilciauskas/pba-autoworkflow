@@ -46,15 +46,15 @@ store.close()
 Output:
 
 ```
-iteration 0: HV=0.6712 (Δ+0.6712) best=0.3774 counts={'complete': 8} …
-iteration 1: HV=0.7051 (Δ+0.0340) best=0.3952 counts={'complete': 5, 'failed': 1} …
-iteration 2: HV=0.7176 (Δ+0.0125) best=0.4018 counts={'failed': 1, 'complete': 5} …
+iteration 0: HV=0.6483 (Δ+0.6483) best=0.3653 counts={'complete': 8} …
+iteration 1: HV=0.6916 (Δ+0.0433) best=0.3881 counts={'complete': 5, 'failed': 1} …
+iteration 2: HV=0.7206 (Δ+0.0290) best=0.4033 counts={'failed': 1, 'complete': 5} …
 
-hypervolume per iteration: [0.671, 0.705, 0.718]
-best: example-b02-e03 Cu Na0.96Cu[Fe(CN)6]0.95·1.6H2O
+hypervolume per iteration: [0.648, 0.692, 0.721]
+best: example-b02-e03 Ni Na0.71Ni[Fe(CN)6]0.96·1.3H2O
 ```
 
-All 20 experiments used only the four allowed metals, and none exceeded 80 °C (maximum 78.2 °C).
+All 20 experiments used only the four allowed metals, and none exceeded 80 °C (maximum 80.0 °C).
 
 `Campaign.run()` is a coroutine. Inside an existing event loop (for example Jupyter), use
 `await campaign.run()` instead of `asyncio.run(...)`.
@@ -78,6 +78,7 @@ All 20 experiments used only the four allowed metals, and none exceeded 80 °C (
 | `hv_convergence_patience` | 3 | Batches below tolerance before stopping |
 | `max_batch_failure_rate` | 0.5 | Halt if a larger share of a batch fails or is quarantined |
 | `seed` | 0 | Random seed |
+| `target_phase` | `None` | Framework phase to optimise for; `None` keeps the campaign's recorded target, else `pba_fm3m` |
 
 The CLI uses its own defaults for some of these (for example `--batch-size 8`).
 
@@ -89,8 +90,8 @@ Pass `workflow_config=WorkflowConfig(...)` to `Campaign` to change the measureme
 |---|---|
 | `xrd_range`, `xrd_step_deg`, `xrd_exposure_s` | (10, 60)° 2θ, 0.02°, 120 s |
 | `wash_cycles` | 3 |
-| `dry_temperature_C`, `dry_duration_s` | 70 °C, 3600 s |
-| `icp_elements` | Na, Fe, Mn, Co, Ni, Cu |
+| `dry_duration_s` | 3600 s (drying temperature and atmosphere are recipe parameters) |
+| `icp_elements` | Na, Fe, Mn, Co, Ni, Cu, Zn |
 | `max_transport_retries`, `retry_backoff_s` | 2, 1.0 s |
 
 ## Reading results
@@ -104,9 +105,9 @@ campaign.dataframe()            # pandas DataFrame, one row per experiment
 
 exp = campaign.best_experiment()
 exp.parameters                  # SynthesisParameters (the recipe)
-exp.descriptors.xrd             # phase_purity, crystallinity_index, lattice_a_A, domain_size_nm, …
+exp.descriptors.xrd             # phase_fractions, phase_lattice, crystallinity_index, lattice_a_A, …
 exp.descriptors.composition     # na_per_fu, vacancy_fraction, formula, …
-exp.objectives.values           # {'phase_purity': …, 'crystallinity': …}
+exp.objectives.values           # {'target_phase_fraction': …, 'crystallinity': …}
 exp.objectives.feasible         # yield constraint satisfied?
 ```
 

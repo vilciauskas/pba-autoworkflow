@@ -15,10 +15,12 @@ not yet connected to physical hardware. The full technical account is in
 
 A Python orchestrator for an autonomous Materials Acceleration Platform targeting
 PBA cathode materials (Na<sub>x</sub>M[Fe(CN)<sub>6</sub>]<sub>1−y</sub>·zH<sub>2</sub>O,
-M = Mn, Fe, Co, Ni, Cu). It plans experiments, drives instruments, reduces raw
+M = Mn, Fe, Co, Ni, Cu, Zn). It plans experiments, drives instruments, reduces raw
 traces to descriptors, records everything, and closes the loop with a constrained
-multi-objective optimizer. The current focus is phase formation, judged from powder
-XRD (phase purity and crystallinity).
+multi-objective optimizer. The current focus is phase formation and polymorph
+control, judged from powder XRD: each campaign targets one framework phase (for
+example cubic or rhombohedral R-3c zinc hexacyanoferrate), and drying temperature
+and atmosphere are part of the recipe.
 
 *This project has received funding under the grant agreement with the Research Council of Lithuania (LMTLT) (Project No. S-ITP-24-7).*
 
@@ -196,9 +198,10 @@ characteristic silent failure of an automated platform.
 | `Objectives` | maximized values + feasibility constraints |
 | `Experiment` | lifecycle record, status, provenance refs |
 
-Objectives (phase formation, from powder XRD): maximize `phase_purity` (PBA share of
-the Bragg intensity) and `crystallinity` (PBA Bragg intensity against Bragg plus
-amorphous halo), subject to isolated yield ≥ 0.35. ICP composition is recorded and
+Objectives (phase formation, from powder XRD): maximize `target_phase_fraction` (weight
+fraction of the campaign's target phase from whole-pattern phase quantification) and
+`crystallinity` (framework Bragg intensity against Bragg plus amorphous halo), subject to
+isolated yield ≥ 0.35. ICP composition is recorded and
 used for the yield and charge-balance checks, but not optimized. A store recorded
 with different objectives is refused rather than mixed in; start a new campaign id.
 

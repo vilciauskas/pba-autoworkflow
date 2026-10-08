@@ -63,8 +63,10 @@ of being silently corrected.
 - **Recipe parameters** (planner-controlled): metal, `c_metal_M`, `c_hcf_M`, `c_nacl_M`,
   `c_citrate_M`, `ph`, `temperature_C`, `addition_rate_mL_min`, `aging_time_h`,
   `stir_rate_rpm`.
-- **Objectives:** XRD phase purity and crystallinity (two-objective Pareto front). Until this
-  change the objectives were sodium inventory and framework integrity from ICP, and a
+- **Objectives:** weight fraction of a chosen target phase and crystallinity, both from
+  whole-pattern XRD phase quantification (two-objective Pareto front). Zn and drying
+  temperature/atmosphere were added for polymorph control. Before that the objectives were
+  XRD phase purity and crystallinity, and before that the objectives were sodium inventory and framework integrity from ICP, and a
   UV-Vis supernatant measurement was part of the workflow; both were removed to focus on phase
   formation.
 - **Replicates are scheduled, not assumed**, so platform noise is estimated from data.

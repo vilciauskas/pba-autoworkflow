@@ -11,10 +11,11 @@ is the lattice constant physically possible for this analogue, is the compositio
 charge-balanced, does the gravimetric yield exceed unity -- and returns the
 reasons a sample should be quarantined instead of trusted.
 
-**Objectives.**  The campaign targets phase formation, judged from powder XRD:
-maximize the phase purity of the PBA framework (no crystalline secondary phase)
-and its crystallinity (Bragg order rather than amorphous scattering), and keep
-the isolated yield high enough for the material to be worth making.  The ICP
+**Objectives.**  The campaign targets the formation of one chosen phase,
+judged from powder XRD: maximize the weight fraction of the target phase in the
+crystalline product (polymorph and secondary-phase selectivity) and the
+crystallinity of the framework (Bragg order rather than amorphous scattering),
+and keep the isolated yield high enough for the material to be worth making.  The ICP
 composition is still measured -- it feeds the yield and the charge-balance
 checks -- but it is not optimized.  :func:`compute_objectives` normalizes everything to
 "larger is better" and records the constraint values so the optimizer can treat
@@ -25,6 +26,8 @@ from __future__ import annotations
 
 import math
 from dataclasses import dataclass
+
+import numpy as np
 
 from ..schema import (
     IONIC_RADIUS_A,
@@ -69,7 +72,12 @@ def quality_flags(desc: SampleDescriptors, params: SynthesisParameters
         if x.phase != "amorphous":
             if x.n_peaks_indexed < 2:
                 flags.append(f"only {x.n_peaks_indexed} reflection(s) indexed")
-            if not math.isfinite(x.lattice_a_A):
+            # The cubic window applies when the cubic framework dominates; the
+            # other polymorphs are refined inside a window around their own
+            # reference cell, so an implausible cell cannot be returned.
+            if x.phase != "pba_fm3m":
+                pass
+            elif not math.isfinite(x.lattice_a_A):
                 flags.append("lattice constant not determined")
             else:
                 lo, hi = LATTICE_WINDOW_A[params.metal]
@@ -112,22 +120,40 @@ def quality_flags(desc: SampleDescriptors, params: SynthesisParameters
 
 
 #: Objective names in canonical order.  All are maximized.
-OBJECTIVE_NAMES: tuple[str, ...] = ("phase_purity", "crystallinity")
+OBJECTIVE_NAMES: tuple[str, ...] = ("target_phase_fraction", "crystallinity")
+
+#: Target phase when a campaign does not name one.
+DEFAULT_TARGET_PHASE = "pba_fm3m"
 
 #: Minimum isolated yield for a run to count as feasible.
 YIELD_FLOOR = 0.35
 
 
+def target_phase_fraction(desc: SampleDescriptors, target_phase: str) -> float:
+    """Weight fraction of ``target_phase`` in the crystalline product.
+
+    Discounted by the share of Bragg intensity no library phase explains: an
+    unknown crystalline phase is a real impurity, but its weight cannot be
+    estimated without a structure, so its intensity share is used instead.
+    """
+    x = desc.xrd
+    if x is None:
+        return 0.0
+    w = float(x.phase_fractions.get(target_phase, 0.0))
+    return float(np.clip(w * (1.0 - x.unidentified_fraction), 0.0, 1.0))
+
+
 def compute_objectives(desc: SampleDescriptors, params: SynthesisParameters,
-                       yield_floor: float = YIELD_FLOOR) -> Objectives:
+                       yield_floor: float = YIELD_FLOOR,
+                       target_phase: str = DEFAULT_TARGET_PHASE) -> Objectives:
     """Map descriptors onto maximization objectives plus feasibility constraints."""
     x = desc.xrd
     values = {
-        # PBA share of all Bragg intensity: 1 = no crystalline secondary phase.
-        # No pattern, or one with no indexed PBA reflection, scores 0.
-        "phase_purity": float(x.phase_purity) if x is not None and x.phase_purity is not None else 0.0,
-        # PBA Bragg intensity against PBA Bragg plus amorphous scattering
-        # (impurity peaks excluded, so the two objectives do not double count).
+        # Polymorph selectivity: how much of the crystalline product is the
+        # phase this campaign wants (Hill-Howard weight fraction).
+        "target_phase_fraction": target_phase_fraction(desc, target_phase),
+        # Order: framework Bragg intensity against Bragg plus amorphous halo,
+        # independent of which framework polymorph formed.
         "crystallinity": float(x.crystallinity_index) if x is not None else 0.0,
     }
     y = desc.isolated_yield if desc.isolated_yield is not None else 0.0

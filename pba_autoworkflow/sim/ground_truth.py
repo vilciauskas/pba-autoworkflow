@@ -36,7 +36,7 @@ memorizing coordinates.
 from __future__ import annotations
 
 import math
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 import numpy as np
 
@@ -52,6 +52,13 @@ from ..schema import (
 #: is what matters here); Cu(OH)2 is the precursor of the CuO seen by XRD.
 KSP_HYDROXIDE: dict[str, float] = {
     "Mn": 1.9e-13, "Fe": 4.9e-17, "Co": 5.9e-15, "Ni": 5.5e-16, "Cu": 2.2e-20,
+    "Zn": 3.0e-17,   # epsilon-Zn(OH)2, precursor of the ZnO seen by XRD
+}
+
+#: Crystalline product of the high-pH side reaction, as a phase-library key.
+HIGH_PH_PHASE: dict[str, str] = {
+    "Mn": "m_oh2/Mn", "Fe": "m_oh2/Fe", "Co": "m_oh2/Co", "Ni": "m_oh2/Ni",
+    "Cu": "cuo", "Zn": "zno",
 }
 
 
@@ -80,11 +87,38 @@ class LatentState:
     solid_mass_mg: float
     failed: bool = False
     metal: str = ""
-    #: crystalline secondary phases, as integrated Bragg intensity relative to
-    #: a fully ordered PBA pattern (see ``simulate_xrd``)
+    #: crystalline secondary phases, as mass fractions of the dried solid
     nacl_fraction: float = 0.0
     hydroxide_fraction: float = 0.0
     failure_mode: str | None = None
+    #: framework polymorphs, as shares of the framework mass (phase-library keys)
+    polymorph_shares: dict = field(default_factory=dict)
+    #: lattice scale relative to the library reference, per non-cubic phase key
+    lattice_scale: dict = field(default_factory=dict)
+
+    def crystalline_masses(self) -> dict[str, float]:
+        """Mass of each crystalline phase per unit mass of solid (library keys).
+
+        The disordered share of the framework (``1 - crystallinity``) scatters
+        into the amorphous halo and is not a crystalline phase.
+        """
+        framework = max(1.0 - self.nacl_fraction - self.hydroxide_fraction, 0.0)
+        out = {k: framework * self.crystallinity * s for k, s in self.polymorph_shares.items()}
+        if self.nacl_fraction > 0:
+            out["nacl"] = self.nacl_fraction
+        if self.hydroxide_fraction > 0 and self.metal in HIGH_PH_PHASE:
+            out[HIGH_PH_PHASE[self.metal]] = self.hydroxide_fraction
+        return out
+
+    def xrd_weight_fractions(self) -> dict[str, float]:
+        """What a perfect XRD quantification would report, by phase id."""
+        m = self.crystalline_masses()
+        total = sum(m.values())
+        out: dict[str, float] = {}
+        for k, v in m.items():
+            pid = k.split("/")[0]
+            out[pid] = out.get(pid, 0.0) + (v / total if total > 0 else 0.0)
+        return out
 
     @property
     def formula(self) -> str:
@@ -134,6 +168,8 @@ class GroundTruth:
         self._a0 = {
             m: a + float(rng.normal(0.0, 0.012)) for m, a in LATTICE_A0_A.items()
         }
+        # Campaign-specific offset of the Zn polymorph balance.
+        self._zn_bias = float(rng.normal(0.0, 0.3))
 
     # ------------------------------------------------------------------ #
     # Latent physics
@@ -205,21 +241,62 @@ class GroundTruth:
             0.02, 0.995,
         )
 
-        # -- phase assignment follows Na content (rhombohedral distortion) and
-        #    disorder (loss of long-range order at very small domains)
+        # -- framework polymorphs
+        lattice_scale: dict[str, tuple[float, ...]] = {}
+        if p.metal == "Zn":
+            # Zn: cubic Fm-3m (octahedral Zn, vacancy-rich) versus rhombohedral
+            # R-3c Na2Zn3[Fe(CN)6]2 (tetrahedral ZnN4).  Illustrative model, not a
+            # fit: with an alkali ferrocyanide the R-3c phase is the usual
+            # product; fast addition and high supersaturation trap the cubic
+            # one, heat and ageing ripen toward R-3c, Zn excess favours the
+            # vacancy-rich cubic phase, and dehydration converts cubic to R-3c
+            # (reported at 70 degC; vacuum lowers the onset).
+            zn_excess = _clip(1.0 / p.hcf_to_metal_ratio - 1.5, 0.0, 3.0)
+            f_na = na_activity / (0.3 + na_activity)
+            z_r3c = (
+                -0.4 + self._zn_bias
+                + 2.0 * f_na
+                - 1.6 * rate_norm
+                - 1.0 * max(0.0, s_norm - 0.3)
+                + 1.2 * _clip(t_norm, 0.0, 1.0)
+                + 1.0 * age_norm
+                - 0.6 * zn_excess
+            )
+            r3c = _sigmoid(z_r3c)
+            t_onset = 68.0 if p.dry_atmosphere == "air" else 45.0
+            r3c += (1.0 - r3c) * _sigmoid((p.dry_temperature_C - t_onset) / 6.0)
+            # Zn3[Fe(CN)6]2 stoichiometry (y = 1/3); charge balance with Fe(II)
+            # then fixes Na = 4(1 - y) - 2.
+            vacancy = 1.0 / 3.0 + 0.10 * (1.0 - r3c) * zn_excess / 3.0
+            na = _clip((4.0 * (1.0 - vacancy) - 2.0) * proton_penalty, 0.02, 2.0)
+            water = 3.0 + 0.6 * (1.0 - r3c)
+            shares = {"pba_fm3m/Zn": 1.0 - r3c, "znhcf_r3c/Zn": r3c}
+            lattice_scale["znhcf_r3c/Zn"] = (1.0 + float(rng.normal(0.0, 0.004)),
+                                             1.0 + float(rng.normal(0.0, 0.004)))
+        elif p.metal in ("Mn", "Fe"):
+            # Na-rich hydrated Mn/Fe frameworks adopt the monoclinic P2_1/n cell.
+            # The onset is placed where this simulator's Na model can reach it
+            # (Na <= ~1.6 per f.u.); real materials transform closer to Na ~ 1.7.
+            p21n = _sigmoid((na - 1.42) / 0.05)
+            shares = {f"pba_fm3m/{p.metal}": 1.0 - p21n, f"pba_p21n/{p.metal}": p21n}
+            lattice_scale[f"pba_p21n/{p.metal}"] = (1.0 + float(rng.normal(0.0, 0.003)),)
+        else:
+            shares = {f"pba_fm3m/{p.metal}": 1.0}
+        shares = {k: v for k, v in shares.items() if v > 1e-4}
+
+        # -- drying removes interstitial water (more readily under vacuum)
+        t_dehyd = 90.0 if p.dry_atmosphere == "air" else 60.0
+        water *= 1.0 - 0.35 * _sigmoid((p.dry_temperature_C - t_dehyd) / 10.0)
+
+        # -- dominant phase; loss of long-range order at very small domains
         if crystallinity < 0.18 or d < 5.0:
             phase = "amorphous"
-        elif na > 1.72 and p.metal in ("Mn", "Fe"):
-            phase = "monoclinic"
-        elif na > 1.45:
-            phase = "rhombohedral"
         else:
-            phase = "cubic"
+            phase = max(shares, key=shares.get).split("/")[0]
 
         lattice_a = (
             self._a0[p.metal]
-            + 0.135 * vacancy
-            - 0.048 * na
+            + (0.0 if p.metal == "Zn" else 0.135 * vacancy - 0.048 * na)
             + 0.010 * (p.temperature_C - 25.0) / 65.0
         )
 
@@ -256,12 +333,12 @@ class GroundTruth:
         # -- crystalline secondary phases (seen by XRD only: their mass and Na
         #    are deliberately not added to the gravimetric or ICP results)
         # NaCl left in the powder when the supporting electrolyte is concentrated.
-        nacl_frac = 0.30 * _sigmoid((p.c_nacl_M - 2.6) / 0.30)
+        nacl_frac = 0.25 * _sigmoid((p.c_nacl_M - 2.6) / 0.30)
         # M(OH)2 once pH passes the solubility-product onset for the *free* metal;
         # citrate is taken to bind M2+ 1:1, which delays the onset.
         free_m = max(p.c_metal_M - p.c_citrate_M, 0.03 * p.c_metal_M)
         ph_onset = 14.0 + 0.5 * math.log10(KSP_HYDROXIDE[p.metal] / free_m)
-        hydroxide_frac = 0.40 * _sigmoid((p.ph - ph_onset) / 0.25)
+        hydroxide_frac = 0.35 * _sigmoid((p.ph - ph_onset) / 0.25)
 
         state = LatentState(
             na_per_fu=na,
@@ -278,6 +355,8 @@ class GroundTruth:
             metal=p.metal,
             nacl_fraction=nacl_frac,
             hydroxide_fraction=hydroxide_frac,
+            polymorph_shares=shares,
+            lattice_scale=lattice_scale,
         )
         return self._apply_noise_and_failures(state, rng)
 

@@ -176,7 +176,8 @@ class Workup(Protocol):
                    solvent: str = "water") -> VesselHandle: ...
 
     async def dry(self, solid: VesselHandle, temperature_C: float = 70.0,
-                  duration_s: float = 3600.0) -> VesselHandle: ...
+                  duration_s: float = 3600.0, vacuum: bool = False) -> VesselHandle:
+        """Dry the solid; ``vacuum`` selects dynamic vacuum instead of ambient air."""
 
     async def weigh(self, solid: VesselHandle) -> float:
         """Dry mass in mg."""

@@ -2,8 +2,9 @@
 
 PBA Autonomous Workflow is a closed-loop orchestrator for the synthesis of Prussian blue
 analogues (PBAs), Na<sub>x</sub>M[Fe(CN)<sub>6</sub>]<sub>1−y</sub>·nH<sub>2</sub>O. It proposes
-co-precipitation recipes, runs them on an automated deck, reduces the XRD, UV-Vis and elemental
-data to a composition, and uses multi-objective Bayesian optimisation to choose the next batch.
+co-precipitation recipes, runs them on an automated deck, reduces the powder XRD pattern to phase
+purity, crystallinity and lattice descriptors (with ICP for composition), and uses multi-objective
+Bayesian optimisation to choose the next batch. The current focus is phase formation.
 
 Read the chapters in order the first time; after that, each one stands alone.
 

@@ -1,11 +1,5 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
-"""Supernatant spectroscopy and elemental-assay reduction.
-
-The UV-Vis routine quantifies unreacted hexacyanoferrate against the turbidity
-and intervalence-charge-transfer background contributed by colloidal product.
-Fitting all three contributions simultaneously matters: reading absorbance at
-322 nm alone systematically over-reports residual ferrocyanide whenever the
-supernatant is cloudy, which is exactly when the run is worst behaved.
+"""Elemental-assay reduction and the capacity estimate.
 
 The ICP routine converts digest concentrations into a per-formula-unit
 composition, propagating the assay error into the reported Na content and
@@ -17,77 +11,17 @@ from __future__ import annotations
 import math
 
 import numpy as np
-from scipy.optimize import nnls
 
 from ..schema import (
     ATOMIC_WEIGHT,
     CompositionDescriptors,
     ICPResult,
     SynthesisParameters,
-    UVVisDescriptors,
-    UVVisSpectrum,
     theoretical_capacity_mAh_g,
 )
 
-#: Molar extinction of Na4[Fe(CN)6] at its 322 nm maximum (L mol-1 cm-1).
-EPS_HCF_322 = 1.0e4
-_HCF_CENTRE_NM = 322.0
-_HCF_SIGMA_NM = 26.0
-
 #: Empirical surface-sodium correction determined from wash-cycle calibration.
 SURFACE_NA_CORRECTION = 0.035
-
-
-def _basis(wl: np.ndarray, metal: str) -> np.ndarray:
-    """Design matrix: [ferrocyanide band, IVCT/d-d band, Rayleigh turbidity, baseline]."""
-    hcf = np.exp(-0.5 * ((wl - _HCF_CENTRE_NM) / _HCF_SIGMA_NM) ** 2)
-    metal_bands = {
-        "Mn": (420.0, 60.0),
-        "Fe": (690.0, 95.0),
-        "Co": (530.0, 80.0),
-        "Ni": (400.0, 70.0),
-        "Cu": (480.0, 85.0),
-    }
-    center, sigma = metal_bands.get(metal, (690.0, 95.0))
-    ivct = np.exp(-0.5 * ((wl - center) / sigma) ** 2)
-    turbidity = (450.0 / wl) ** 4
-    baseline = np.ones_like(wl)
-    return np.column_stack([hcf, ivct, turbidity, baseline])
-
-
-def analyze_uvvis(spectrum: UVVisSpectrum, params: SynthesisParameters
-                  ) -> UVVisDescriptors:
-    """Deconvolute the supernatant spectrum and compute conversion."""
-    wl = np.asarray(spectrum.wavelength_nm, dtype=float)
-    a = np.asarray(spectrum.absorbance, dtype=float)
-
-    # Exclude saturated points; they carry no quantitative information.
-    keep = a < 3.9
-    A = _basis(wl[keep], params.metal)
-    coeffs, _ = nnls(A, a[keep])
-    c_hcf_band, c_ivct, _c_turb, _c_base = (float(v) for v in coeffs)
-
-    c_cuvette = c_hcf_band / (EPS_HCF_322 * spectrum.path_length_cm)
-    residual_hcf_M = c_cuvette * spectrum.dilution_factor
-
-    # Conversion against the hexacyanoferrate actually charged, on a
-    # total-volume basis (the supernatant is the whole reaction liquid).
-    charged_M = params.c_hcf_M * params.volume_B_mL / params.total_volume_mL
-    conversion = float(np.clip(1.0 - residual_hcf_M / max(charged_M, 1e-9), 0.0, 1.0))
-
-    a_420 = float(np.interp(420.0, wl, a))
-    lambda_max = None
-    if c_ivct > 0.02:
-        vis = (wl > 550.0) & (wl < 800.0)
-        fitted_ivct = c_ivct * np.exp(-0.5 * ((wl[vis] - 690.0) / 95.0) ** 2)
-        lambda_max = float(wl[vis][int(np.argmax(fitted_ivct))])
-
-    return UVVisDescriptors(
-        residual_hcf_M=float(max(residual_hcf_M, 0.0)),
-        a_420=a_420,
-        conversion=conversion,
-        ivct_lambda_max_nm=lambda_max,
-    )
 
 
 def analyze_icp(icp: ICPResult, params: SynthesisParameters) -> CompositionDescriptors:

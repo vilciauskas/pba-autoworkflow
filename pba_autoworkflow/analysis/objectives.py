@@ -11,9 +11,12 @@ is the lattice constant physically possible for this analogue, is the compositio
 charge-balanced, does the gravimetric yield exceed unity -- and returns the
 reasons a sample should be quarantined instead of trusted.
 
-**Objectives.**  The campaign is multi-objective: maximize sodium inventory,
-minimize the vacancy fraction, and keep the isolated yield high enough for the
-material to be worth making.  :func:`compute_objectives` normalizes everything to
+**Objectives.**  The campaign targets phase formation, judged from powder XRD:
+maximize the phase purity of the PBA framework (no crystalline secondary phase)
+and its crystallinity (Bragg order rather than amorphous scattering), and keep
+the isolated yield high enough for the material to be worth making.  The ICP
+composition is still measured -- it feeds the yield and the charge-balance
+checks -- but it is not optimized.  :func:`compute_objectives` normalizes everything to
 "larger is better" and records the constraint values so the optimizer can treat
 yield as a feasibility threshold rather than a third thing to trade off.
 """
@@ -59,32 +62,37 @@ def quality_flags(desc: SampleDescriptors, params: SynthesisParameters
         flags.append("no diffraction data")
     else:
         x = desc.xrd
-        if x.n_peaks_indexed < 2:
-            flags.append(f"only {x.n_peaks_indexed} reflection(s) indexed")
-        if not math.isfinite(x.lattice_a_A):
-            flags.append("lattice constant not determined")
-        else:
-            a0 = LATTICE_A0_A[params.metal]
-            comp = desc.composition
-            if comp and math.isfinite(comp.vacancy_fraction) and math.isfinite(comp.na_per_fu):
-                # Empirical slopes: vacancies contract the lattice (~ -0.4 A / vac), sodium expands it (~ +0.1 A / Na)
-                a_calc = a0 - 0.4 * comp.vacancy_fraction + 0.1 * comp.na_per_fu
-                if not (a_calc - 0.1 <= x.lattice_a_A <= a_calc + 0.1):
-                    flags.append(
-                        f"lattice a={x.lattice_a_A:.3f} A inconsistent with composition "
-                        f"(expected ~{a_calc:.2f} A via Vegard's law)"
-                    )
+        # An amorphous product is a legitimate (poor) outcome that the phase
+        # objectives score directly; quarantining it would hide from the
+        # optimiser exactly where phase formation fails.  The structural
+        # checks below only make sense for an indexed crystalline pattern.
+        if x.phase != "amorphous":
+            if x.n_peaks_indexed < 2:
+                flags.append(f"only {x.n_peaks_indexed} reflection(s) indexed")
+            if not math.isfinite(x.lattice_a_A):
+                flags.append("lattice constant not determined")
             else:
-                lo, hi = LATTICE_WINDOW_A[params.metal]
-                if not (lo <= x.lattice_a_A <= hi):
-                    flags.append(
-                        f"lattice a={x.lattice_a_A:.3f} A outside "
-                        f"[{lo:.2f}, {hi:.2f}] for {params.metal}"
-                    )
-        if math.isfinite(x.fit_residual) and x.fit_residual > 0.12:
-            flags.append(f"indexing residual {x.fit_residual:.3f} deg")
-        if math.isfinite(x.domain_size_nm) and not (1.0 <= x.domain_size_nm <= 400.0):
-            flags.append(f"implausible domain size {x.domain_size_nm:.1f} nm")
+                a0 = LATTICE_A0_A[params.metal]
+                comp = desc.composition
+                if comp and math.isfinite(comp.vacancy_fraction) and math.isfinite(comp.na_per_fu):
+                    # Empirical slopes: vacancies contract the lattice (~ -0.4 A / vac), sodium expands it (~ +0.1 A / Na)
+                    a_calc = a0 - 0.4 * comp.vacancy_fraction + 0.1 * comp.na_per_fu
+                    if not (a_calc - 0.1 <= x.lattice_a_A <= a_calc + 0.1):
+                        flags.append(
+                            f"lattice a={x.lattice_a_A:.3f} A inconsistent with composition "
+                            f"(expected ~{a_calc:.2f} A via Vegard's law)"
+                        )
+                else:
+                    lo, hi = LATTICE_WINDOW_A[params.metal]
+                    if not (lo <= x.lattice_a_A <= hi):
+                        flags.append(
+                            f"lattice a={x.lattice_a_A:.3f} A outside "
+                            f"[{lo:.2f}, {hi:.2f}] for {params.metal}"
+                        )
+            if math.isfinite(x.fit_residual) and x.fit_residual > 0.12:
+                flags.append(f"indexing residual {x.fit_residual:.3f} deg")
+            if math.isfinite(x.domain_size_nm) and not (1.0 <= x.domain_size_nm <= 400.0):
+                flags.append(f"implausible domain size {x.domain_size_nm:.1f} nm")
 
     if desc.composition is None:
         flags.append("no elemental assay")
@@ -111,14 +119,11 @@ def quality_flags(desc: SampleDescriptors, params: SynthesisParameters
     if desc.isolated_yield is not None and desc.isolated_yield > 1.05:
         flags.append(f"isolated yield {desc.isolated_yield:.2f} exceeds theory")
 
-    if desc.uvvis is not None and desc.uvvis.conversion < 0.02:
-        flags.append("essentially no conversion detected")
-
     return QualityReport(passed=not flags, flags=flags)
 
 
 #: Objective names in canonical order.  All are maximized.
-OBJECTIVE_NAMES: tuple[str, ...] = ("na_inventory", "framework_integrity")
+OBJECTIVE_NAMES: tuple[str, ...] = ("phase_purity", "crystallinity")
 
 #: Minimum isolated yield for a run to count as feasible.
 YIELD_FLOOR = 0.35
@@ -127,19 +132,14 @@ YIELD_FLOOR = 0.35
 def compute_objectives(desc: SampleDescriptors, params: SynthesisParameters,
                        yield_floor: float = YIELD_FLOOR) -> Objectives:
     """Map descriptors onto maximization objectives plus feasibility constraints."""
-    comp = desc.composition
-    na = comp.na_per_fu if comp is not None else 0.0
-    vacancy = comp.vacancy_fraction if comp is not None else 1.0
-
+    x = desc.xrd
     values = {
-        # Sodium per formula unit, normalized to the theoretical maximum of 2.
-        "na_inventory": float(na / 2.0),
-        # Completeness of the hexacyanoferrate sublattice.  Not clipped at 1.0:
-        # the measured value carries assay error, and truncating it there would
-        # make every near-perfect framework score identically, collapsing the
-        # Pareto front onto a single point and leaving the planner nothing to
-        # discriminate between good and excellent samples.
-        "framework_integrity": float(1.0 - vacancy),
+        # PBA share of all Bragg intensity: 1 = no crystalline secondary phase.
+        # No pattern, or one with no indexed PBA reflection, scores 0.
+        "phase_purity": float(x.phase_purity) if x is not None and x.phase_purity is not None else 0.0,
+        # PBA Bragg intensity against PBA Bragg plus amorphous scattering
+        # (impurity peaks excluded, so the two objectives do not double count).
+        "crystallinity": float(x.crystallinity_index) if x is not None else 0.0,
     }
     y = desc.isolated_yield if desc.isolated_yield is not None else 0.0
     constraints = {"isolated_yield": float(y - yield_floor)}

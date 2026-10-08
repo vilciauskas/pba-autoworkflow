@@ -25,14 +25,12 @@ from ..schema import (
     ICPResult,
     METALS,
     SynthesisParameters,
-    UVVisSpectrum,
     XRDPattern,
 )
 from ..sim.ground_truth import GroundTruth, LatentState
 from ..sim.instruments import (
     simulate_gravimetric_yield,
     simulate_icp,
-    simulate_uvvis,
     simulate_xrd,
 )
 from .base import (
@@ -364,23 +362,6 @@ class SimulatedDiffractometer(_SimDevice):
         )
 
 
-class SimulatedSpectrophotometer(_SimDevice):
-    capacity = 1
-
-    async def measure(self, liquid: VesselHandle, dilution_factor: float,
-                      wavelength_range: tuple[float, float]) -> UVVisSpectrum:
-        self._require_ready()
-        rec = self.backend.record(liquid.vessel_id)
-        if rec.latent is None or rec.params is None:
-            raise HardwareFault(f"{self.device_id}: cuvette empty")
-        async with self._lock:
-            await self.backend.dwell(90.0, self.device_id, f"uvvis:{liquid.vessel_id}")
-        return simulate_uvvis(
-            rec.latent, rec.params, self.backend.rng_for(liquid.experiment_id),
-            wavelength_range=wavelength_range, dilution_factor=dilution_factor,
-        )
-
-
 class SimulatedElementalAnalyzer(_SimDevice):
     capacity = 1
 
@@ -419,7 +400,6 @@ def build_simulated_platform(
         reactor=SimulatedReactor("rx-01", backend, capacity=reactor_capacity),
         workup=SimulatedWorkup("wu-01", backend),
         diffractometer=SimulatedDiffractometer("xrd-01", backend),
-        spectrophotometer=SimulatedSpectrophotometer("uv-01", backend),
         elemental=SimulatedElementalAnalyzer("icp-01", backend),
     )
     return platform, backend

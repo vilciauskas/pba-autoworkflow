@@ -183,7 +183,7 @@ def plot_campaign(campaign: Campaign, path: str | Path):
 
 
 def plot_best_pattern(campaign: Campaign, path: str | Path):
-    """Diffractogram of the best sample with the indexed reflections marked."""
+    """Diffractogram of the best sample: indexed PBA reflections and unindexed lines marked."""
     import matplotlib
 
     matplotlib.use("Agg")
@@ -197,6 +197,7 @@ def plot_best_pattern(campaign: Campaign, path: str | Path):
     # inconsistently with the reflection table in the same report.
     from .analysis.xrd import (
         _HKL_LABELS as labels,
+        attribute_peaks,
         find_and_fit_peaks,
         index_cubic,
         snip_background,
@@ -221,11 +222,21 @@ def plot_best_pattern(campaign: Campaign, path: str | Path):
         ax.annotate(labels.get(m, str(m)), xy=(p.two_theta_deg, ax.get_ylim()[1]),
                     xytext=(0, -12), textcoords="offset points", fontsize=7,
                     ha="center", color="#1f4e79")
+    impurity = attribute_peaks(peaks, a, assign, pattern.wavelength_A)[1] if assign else []
+    if impurity:
+        top = max(p.amplitude for p in peaks)
+        ax.plot([p.two_theta_deg for p in impurity],
+                [np.interp(p.two_theta_deg, tt, np.asarray(pattern.intensity, float)) + 0.04 * top
+                 for p in impurity],
+                ls="none", marker="v", ms=5, color="#d98c1f",
+                label="unindexed (secondary phase)")
     comp = best.descriptors.composition
     d = best.descriptors.xrd
+    purity = (f", phase purity {d.phase_purity:.2f}"
+              if d is not None and d.phase_purity is not None else "")
     subtitle = (f"{comp.formula if comp else '?'} — "
                 f"a = {a:.4f} Å, D = {d.domain_size_nm:.0f} nm, "
-                f"{d.phase}" if d else "")
+                f"{d.phase}{purity}" if d else "")
     ax.set_ylabel("intensity (counts)")
     ax.set_title(f"Best sample: {best.experiment_id}\n{subtitle}",
                  loc="left", fontsize=11)

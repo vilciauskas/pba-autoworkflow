@@ -3,7 +3,7 @@
 
 The important tests here are not the round-trips -- they are the two that check
 the *analysis* recovers the hidden truth from a simulated trace
-(``test_xrd_recovers_lattice_constant``, ``test_uvvis_recovers_conversion``) and
+(``test_xrd_recovers_lattice_constant``, ``test_xrd_recovers_phase_purity``) and
 the two that check the orchestrator behaves under failure
 (``test_hardware_fault_does_not_kill_campaign``, ``test_station_exclusivity``).
 Those are the properties that decide whether the loop is trustworthy on real
@@ -31,7 +31,7 @@ from pba_autoworkflow.analysis.objectives import (
     quality_flags,
     scalarize,
 )
-from pba_autoworkflow.analysis.spectra import analyze_icp, analyze_uvvis
+from pba_autoworkflow.analysis.spectra import analyze_icp
 from pba_autoworkflow.analysis.xrd import analyze_pattern, index_cubic, find_and_fit_peaks
 from pba_autoworkflow.campaign import Campaign
 from pba_autoworkflow.devices.base import HardwareFault, VesselHandle
@@ -44,6 +44,7 @@ from pba_autoworkflow.optimize.planner import (
 from pba_autoworkflow.optimize.surrogate import MixedGP
 from pba_autoworkflow.report import plot_campaign
 from pba_autoworkflow.schema import (
+    XRDDescriptors,
     METALS,
     CompositionDescriptors,
     Objectives,
@@ -54,7 +55,7 @@ from pba_autoworkflow.schema import (
 )
 from pba_autoworkflow.scheduler import StationPool
 from pba_autoworkflow.sim.ground_truth import GroundTruth
-from pba_autoworkflow.sim.instruments import simulate_icp, simulate_uvvis, simulate_xrd
+from pba_autoworkflow.sim.instruments import simulate_icp, simulate_xrd
 
 
 def recipe(**over) -> SynthesisParameters:
@@ -150,15 +151,58 @@ def test_xrd_indexing_returns_nothing_for_flat_pattern():
     assert not assign or math.isnan(a)
 
 
-def test_uvvis_recovers_conversion():
-    """Deconvolution must recover conversion even with colloidal turbidity."""
+def _latent_with(metal="Mn", **impurity):
     gt = GroundTruth(seed=9, reproducibility=0.0, failure_rate=0.0)
-    rng = np.random.default_rng(4)
-    p = recipe(c_metal_M=0.1, c_hcf_M=0.1, temperature_C=70.0, aging_time_h=8.0)
-    latent = gt.latent(p, rng)
-    spectrum = simulate_uvvis(latent, p, rng)
-    desc = analyze_uvvis(spectrum, p)
-    assert desc.conversion == pytest.approx(latent.conversion, abs=0.06)
+    p = recipe(metal=metal, c_citrate_M=0.06, aging_time_h=12.0)
+    lat = gt.latent(p, np.random.default_rng(4))
+    lat.nacl_fraction = impurity.get("nacl", 0.0)
+    lat.hydroxide_fraction = impurity.get("hydroxide", 0.0)
+    return lat
+
+
+@pytest.mark.parametrize("metal,impurity", [("Mn", {"nacl": 0.25}), ("Co", {"hydroxide": 0.3}),
+                                            ("Ni", {"nacl": 0.1, "hydroxide": 0.15})])
+def test_xrd_recovers_phase_purity(metal, impurity):
+    """Secondary-phase lines are found, and do not bias the PBA lattice constant."""
+    lat = _latent_with(metal, **impurity)
+    desc = analyze_pattern(simulate_xrd(lat, np.random.default_rng(1)))
+    truth = lat.crystallinity / (lat.crystallinity + sum(impurity.values()))
+    assert desc.n_impurity_peaks >= 2
+    assert desc.phase_purity == pytest.approx(truth, abs=0.06)
+    assert desc.lattice_a_A == pytest.approx(lat.lattice_a_A, abs=0.01)
+    assert desc.phase == "cubic", "impurity lines next to PBA reflections are not a distortion"
+
+
+def test_xrd_pure_pattern_has_no_impurity_lines():
+    lat = _latent_with("Fe")
+    desc = analyze_pattern(simulate_xrd(lat, np.random.default_rng(1)))
+    assert desc.n_impurity_peaks == 0 and desc.phase_purity == pytest.approx(1.0)
+
+
+def test_xrd_crystallinity_tracks_order():
+    """Crystallinity must rank samples by their ordered fraction.
+
+    The halo profile fit has a known downward bias (about -0.15 on the simulated
+    deck), so this checks rank and rough scale, not absolute agreement.
+    """
+    measured = []
+    for order in (0.3, 0.5, 0.7, 0.9):
+        lat = _latent_with("Mn"); lat.crystallinity = order
+        measured.append(analyze_pattern(simulate_xrd(lat, np.random.default_rng(2))).crystallinity_index)
+    assert measured == sorted(measured), measured
+    assert measured[-1] - measured[0] > 0.4, measured
+
+
+def test_amorphous_product_is_scored_not_quarantined():
+    """An amorphous result is information about phase formation, not bad data."""
+    x = XRDDescriptors(lattice_a_A=float("nan"), domain_size_nm=float("nan"),
+                       crystallinity_index=0.05, fwhm_200_deg=float("nan"), phase="amorphous",
+                       n_peaks_indexed=0, fit_residual=float("inf"), phase_purity=0.0)
+    comp = CompositionDescriptors(na_per_fu=1.0, fe_per_metal=0.8, vacancy_fraction=0.2,
+                                  water_per_fu=3.0, formula="t")
+    desc = SampleDescriptors(xrd=x, composition=comp, isolated_yield=0.6)
+    assert quality_flags(desc, recipe()).passed
+    assert compute_objectives(desc, recipe()).values["phase_purity"] == 0.0
 
 
 def test_icp_recovers_composition():
@@ -617,7 +661,7 @@ def test_summary_is_serializable(tmp_path):
     assert "campaign_id" in text
     df = c.dataframe()
     assert len(df) == len(c.history)
-    assert "obj_na_inventory" in df.columns or "status" in df.columns
+    assert "obj_phase_purity" in df.columns or "status" in df.columns
     store.close()
 
 
@@ -692,26 +736,19 @@ def test_reflection_labels_are_generated_not_tabulated():
     assert 5 not in allowed_reflections(parity="all")
 
 
-def test_framework_integrity_does_not_saturate():
-    """Near-perfect frameworks must stay distinguishable.
-
-    Clipping the measured vacancy at zero collapsed every good sample onto
-    framework_integrity == 1.000 exactly, which flattened the Pareto front to a
-    single point and left the planner nothing to rank.
-    """
-    comps = [
-        CompositionDescriptors(na_per_fu=1.8, fe_per_metal=fm,
-                               vacancy_fraction=1.0 - fm, water_per_fu=1.0,
-                               formula="t")
-        for fm in (0.98, 1.00, 1.02, 1.04)
-    ]
-    scores = [
-        compute_objectives(SampleDescriptors(composition=c, isolated_yield=0.6),
-                           recipe()).values["framework_integrity"]
-        for c in comps
-    ]
-    assert len(set(scores)) == len(scores), f"objective saturated: {scores}"
-    assert scores == sorted(scores), "ordering by measured Fe/M not preserved"
+def test_phase_objectives_preserve_ordering():
+    """Purer and more crystalline patterns must score strictly higher."""
+    def xd(purity, cryst):
+        return XRDDescriptors(lattice_a_A=10.2, domain_size_nm=40.0, crystallinity_index=cryst,
+                              fwhm_200_deg=0.2, phase="cubic", n_peaks_indexed=8,
+                              fit_residual=0.01, phase_purity=purity)
+    vals = [compute_objectives(SampleDescriptors(xrd=xd(p, c), isolated_yield=0.6), recipe()).values
+            for p, c in ((0.70, 0.50), (0.85, 0.65), (0.97, 0.80), (1.00, 0.95))]
+    assert [v["phase_purity"] for v in vals] == [0.70, 0.85, 0.97, 1.00]
+    assert [v["crystallinity"] for v in vals] == [0.50, 0.65, 0.80, 0.95]
+    # no pattern scores zero, it is not imputed
+    none = compute_objectives(SampleDescriptors(isolated_yield=0.6), recipe()).values
+    assert none == {"phase_purity": 0.0, "crystallinity": 0.0}
 
 
 def test_formula_weight_clamps_negative_vacancy():
@@ -798,14 +835,14 @@ def test_scalarize_never_prefers_infeasible_over_feasible():
     characterize.
     """
     great_but_infeasible = Objectives(
-        values={"na_inventory": 1.0, "framework_integrity": 1.0},
+        values={"phase_purity": 1.0, "crystallinity": 1.0},
         constraints={"isolated_yield": -0.30}, feasible=False)
     poor_but_feasible = Objectives(
-        values={"na_inventory": 0.05, "framework_integrity": 0.05},
+        values={"phase_purity": 0.05, "crystallinity": 0.05},
         constraints={"isolated_yield": 0.01}, feasible=True)
     assert scalarize(poor_but_feasible) > scalarize(great_but_infeasible)
     # Among infeasible points, a smaller shortfall must still rank higher.
-    near_miss = Objectives(values={"na_inventory": 0.5, "framework_integrity": 0.5},
+    near_miss = Objectives(values={"phase_purity": 0.5, "crystallinity": 0.5},
                            constraints={"isolated_yield": -0.01}, feasible=False)
     assert scalarize(near_miss) > scalarize(great_but_infeasible)
 
@@ -863,8 +900,8 @@ def test_fe_analogue_vacancy_is_measured_not_assumed():
     ICP sees one indistinguishable iron pool for the Fe analogue.  An earlier
     version split total Fe 50/50 between the N and C sites, which forces
     Fe/M == 1.000 exactly -- so every Prussian blue sample scored a perfect
-    framework_integrity regardless of what was synthesized, and the optimizer
-    duly reported Fe as the best recipe.  Carbon (CHN) resolves the sublattice.
+    framework (then an objective) regardless of what was synthesized, and the
+    optimizer duly reported Fe as the best recipe.  Carbon (CHN) resolves the sublattice.
     """
     gt = GroundTruth(seed=3, reproducibility=0.0, failure_rate=0.0)
     rng = np.random.default_rng(5)
@@ -915,3 +952,27 @@ def test_fe_analogue_without_carbon_is_undetermined_not_guessed():
     report = quality_flags(SampleDescriptors(composition=comp, isolated_yield=0.5), p)
     assert not report.passed
     assert any("not determinable" in f for f in report.flags)
+
+
+def test_xrd_population_no_false_distortion_and_bounded_crystallinity_bias():
+    """Over random recipes (with their secondary phases), impurity lines must not
+    be read as a rhombohedral/monoclinic split, and the crystallinity index must
+    stay within a bounded bias of the simulated ordered fraction."""
+    from pba_autoworkflow.schema import default_design_space
+    space = default_design_space()
+    names, n_cont = space.encoded_names, len(space.continuous)
+    gt = GroundTruth(seed=0, reproducibility=0.0, failure_rate=0.0)
+    rng = np.random.default_rng(7)
+    false_split, bias = 0, []
+    for k in range(60):
+        x = np.zeros(len(names)); x[:n_cont] = rng.uniform(0, 1, n_cont)
+        x[n_cont + k % (len(names) - n_cont)] = 1.0
+        p = space.decode(x)
+        lat = gt.latent(p, rng)
+        if lat.failed:
+            continue
+        d = analyze_pattern(simulate_xrd(lat, rng))
+        false_split += lat.phase == "cubic" and d.phase in ("rhombohedral", "monoclinic")
+        bias.append(d.crystallinity_index - lat.crystallinity)
+    assert false_split <= 1, f"{false_split} cubic samples called distorted"
+    assert abs(float(np.median(bias))) < 0.25, f"median crystallinity bias {np.median(bias):+.3f}"

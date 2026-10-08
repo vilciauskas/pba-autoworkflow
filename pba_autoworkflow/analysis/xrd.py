@@ -142,6 +142,44 @@ def _fit_peak(tt: np.ndarray, y: np.ndarray, idx: int, half_width_pts: int
     return FittedPeak(centre, fwhm, amp, eta, area)
 
 
+def amorphous_halo_area(pattern: XRDPattern, lattice_a_A: float | None = None) -> float:
+    """Integrated intensity of the broad amorphous halo.
+
+    SNIP (window ~1 deg) keeps the Bragg peaks but strips the halo (sigma ~5 deg)
+    into its background, so the halo is recovered from that background curve by
+    fitting ``c0 + c1 exp(-(2theta - 2theta_0)/L) + Gaussian``: a flat term for
+    fluorescence/detector floor, an exponential for air and low-angle scatter,
+    and the halo.  The halo is held near the (200) position of the refined
+    lattice (+/- 2 deg; 14-24 deg when the pattern did not index) and to a width
+    of 3-8 deg -- left free, a wide Gaussian at the low-angle edge imitates the
+    air-scatter exponential and inflates the halo several-fold.  This is a
+    profile model, so its numbers are only as good as that assumption for the
+    instrument at hand.
+    """
+    if lattice_a_A is not None and math.isfinite(lattice_a_A):
+        ratio = pattern.wavelength_A / lattice_a_A          # d(200) = a / 2
+        c = 2.0 * math.degrees(math.asin(min(ratio, 0.999)))
+        centre_bounds = (c - 2.0, c + 2.0)
+    else:
+        centre_bounds = (14.0, 24.0)
+    tt = np.asarray(pattern.two_theta_deg, dtype=float)
+    bg = snip_background(np.asarray(pattern.intensity, dtype=float))
+    t0 = float(tt[0])
+
+    def model(t, c0, c1, L, A, mu, s):
+        return c0 + c1 * np.exp(-(t - t0) / L) + A * np.exp(-0.5 * ((t - mu) / s) ** 2)
+
+    span = float(np.max(bg) - np.min(bg)) or 1.0
+    p0 = (float(np.min(bg)), span, 8.0, 0.2 * span, float(np.mean(centre_bounds)), 5.0)
+    lo = (0.0, 0.0, 1.0, 0.0, centre_bounds[0], 3.0)
+    hi = (np.inf, np.inf, 40.0, np.inf, centre_bounds[1], 8.0)
+    try:
+        (_c0, _c1, _L, A, _mu, s), _ = curve_fit(model, tt, bg, p0=p0, bounds=(lo, hi), maxfev=20000)
+    except (RuntimeError, ValueError):
+        return 0.0
+    return float(A * s * math.sqrt(2.0 * math.pi))
+
+
 def find_and_fit_peaks(pattern: XRDPattern, min_prominence_frac: float = 0.035
                        ) -> tuple[list[FittedPeak], np.ndarray, np.ndarray]:
     """Background-strip, locate and profile-fit the reflections."""
@@ -213,7 +251,10 @@ def index_cubic(peaks: list[FittedPeak], wavelength_A: float,
         diff = np.abs(obs[:, None] - calc[None, :])
         j = np.argmin(diff, axis=1)
         resid = diff[np.arange(obs.size), j]
-        score = float(np.sum(weights * resid ** 2))
+        # Truncated loss: a line that indexes to nothing (a secondary phase)
+        # costs a fixed penalty instead of dragging ``a`` towards a wrong
+        # solution that half-fits it.
+        score = float(np.sum(weights * np.minimum(resid, 0.45) ** 2))
         # Require the strongest observed line to index within 0.4 deg.
         if resid[int(np.argmax([p.area for p in peaks]))] > 0.4:
             score += 10.0
@@ -309,7 +350,10 @@ def classify_phase(peaks: list[FittedPeak], assign: dict[int, FittedPeak],
         if near:
             partner = min(near, key=lambda p: abs(p.two_theta_deg - ref.two_theta_deg))
             splits.append(abs(partner.two_theta_deg - ref.two_theta_deg))
-    if not splits:
+    # A distortion splits the affected reflections systematically; a secondary
+    # phase line that happens to sit next to one or two PBA reflections does not.
+    eligible = sum(1 for m in assign if m % 16 != 0)
+    if len(splits) < 2 or len(splits) < 0.4 * eligible:
         return "cubic"
     mean_split = float(np.mean(splits))
     if mean_split > 0.24:
@@ -317,20 +361,54 @@ def classify_phase(peaks: list[FittedPeak], assign: dict[int, FittedPeak],
     return "rhombohedral"
 
 
+#: A fitted peak belongs to the PBA if it lies this close to an allowed cubic
+#: reflection at the refined lattice constant...
+PBA_LINE_TOL_DEG = 0.45
+#: ...or this close to an indexed reflection (a component of a rhombohedral or
+#: monoclinic split; same window :func:`classify_phase` uses).
+SPLIT_PARTNER_TOL_DEG = 0.55
+
+
+def attribute_peaks(peaks: list[FittedPeak], a: float, assign: dict[int, FittedPeak],
+                    wavelength_A: float) -> tuple[list[FittedPeak], list[FittedPeak]]:
+    """Split fitted peaks into PBA reflections and unindexed (impurity) lines.
+
+    An impurity line that happens to coincide with a PBA reflection is counted
+    as PBA, so phase purity is an upper bound; secondary phases whose strong
+    lines all overlap the framework pattern are not detectable this way.
+    """
+    ratio = wavelength_A / (2.0 * a / np.sqrt(_ALLOWED_M))
+    calc = 2.0 * np.degrees(np.arcsin(ratio[ratio < 1.0]))
+    indexed = [p.two_theta_deg for p in assign.values()]
+    pba, impurity = [], []
+    for p in peaks:
+        near_line = calc.size and float(np.min(np.abs(calc - p.two_theta_deg))) < PBA_LINE_TOL_DEG
+        near_indexed = any(abs(p.two_theta_deg - t) < SPLIT_PARTNER_TOL_DEG for t in indexed)
+        (pba if near_line or near_indexed else impurity).append(p)
+    return pba, impurity
+
+
 def analyze_pattern(pattern: XRDPattern) -> XRDDescriptors:
     """Full reduction of one diffractogram to structural descriptors."""
     peaks, tt, y = find_and_fit_peaks(pattern)
-    total = float(np.trapezoid(np.clip(y, 0.0, None), tt))
-    peak_area = float(sum(p.area for p in peaks))
-    crystallinity = float(np.clip(peak_area / total, 0.0, 1.0)) if total > 0 else 0.0
-
     a, assign, rms = index_cubic(peaks, pattern.wavelength_A)
+    halo = amorphous_halo_area(pattern, a if assign else None)
     if not assign:
+        peak_area = float(sum(p.area for p in peaks))
         return XRDDescriptors(
             lattice_a_A=float("nan"), domain_size_nm=float("nan"),
-            crystallinity_index=crystallinity, fwhm_200_deg=float("nan"),
-            phase="amorphous", n_peaks_indexed=0, fit_residual=float("inf"),
+            crystallinity_index=float(peak_area / (peak_area + halo)) if peak_area + halo > 0 else 0.0,
+            fwhm_200_deg=float("nan"), phase="amorphous", n_peaks_indexed=0,
+            fit_residual=float("inf"), phase_purity=0.0, n_impurity_peaks=len(peaks),
         )
+    pba, impurity = attribute_peaks(peaks, a, assign, pattern.wavelength_A)
+    pba_area = float(sum(p.area for p in pba))
+    imp_area = float(sum(p.area for p in impurity))
+    purity = pba_area / (pba_area + imp_area) if pba_area + imp_area > 0 else 0.0
+    # Crystallinity of the PBA itself: its Bragg intensity against Bragg plus
+    # amorphous halo.  Impurity lines are left out, so a crystalline secondary
+    # phase cannot raise it.
+    crystallinity = pba_area / (pba_area + halo) if pba_area + halo > 0 else 0.0
     d_nm, _strain = scherrer_domain_size_nm(assign, pattern.wavelength_A)
     fwhm_200 = assign[4].fwhm_deg if 4 in assign else min(
         assign.values(), key=lambda p: p.two_theta_deg
@@ -344,6 +422,8 @@ def analyze_pattern(pattern: XRDPattern) -> XRDDescriptors:
         phase=phase,  # type: ignore[arg-type]
         n_peaks_indexed=len(assign),
         fit_residual=float(rms),
+        phase_purity=float(np.clip(purity, 0.0, 1.0)),
+        n_impurity_peaks=len(impurity),
     )
 
 

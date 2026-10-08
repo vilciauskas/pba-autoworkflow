@@ -46,7 +46,7 @@ the same numbers are in [key_results.json](key_results.json) in machine-readable
 | Scheduling | `scheduler.py` | station pool with per-instrument capacity, batch concurrency |
 | Workflow | `workflow.py` | turns a recipe into a sequence of device commands |
 | Devices | `devices/` | one protocol per instrument class; simulated backend included |
-| Analysis | `analysis/` | XRD, UV-vis and elemental traces → descriptors → objectives |
+| Analysis | `analysis/` | XRD and elemental traces → descriptors → objectives |
 | Optimisation | `optimize/` | GP surrogate; qNEHVI, Sobol and random planners |
 | Data model | `schema.py` | pydantic models, units in field names (`c_metal_M`, `temperature_C`) |
 | Provenance | `provenance.py` | SQLite `campaign.db` plus raw traces as `.npz` |
@@ -63,7 +63,10 @@ of being silently corrected.
 - **Recipe parameters** (planner-controlled): metal, `c_metal_M`, `c_hcf_M`, `c_nacl_M`,
   `c_citrate_M`, `ph`, `temperature_C`, `addition_rate_mL_min`, `aging_time_h`,
   `stir_rate_rpm`.
-- **Objectives:** sodium inventory and framework integrity (two-objective Pareto front).
+- **Objectives:** XRD phase purity and crystallinity (two-objective Pareto front). Until this
+  change the objectives were sodium inventory and framework integrity from ICP, and a
+  UV-Vis supernatant measurement was part of the workflow; both were removed to focus on phase
+  formation.
 - **Replicates are scheduled, not assumed**, so platform noise is estimated from data.
 - **Fault handling:** experiments are `complete`, `failed` or `quarantined`. A hardware fault
   ends one experiment, not the whole campaign.
@@ -84,7 +87,9 @@ of being silently corrected.
 | Best experiment | `demo-01-b03-e01`, Cu, Na1.90Cu[Fe(CN)6]0.94·1.0H2O |
 | Best objectives | Na inventory 0.951, framework integrity 0.939 |
 
-*Provenance note.* This reference campaign (`runs/demo-reference/`) was recorded before a fix that made the simulator's per-experiment noise independent of Python's per-process hash salt. The stored results are the record of that run, but re-running the same command now gives different (and, from now on, reproducible) numbers.
+*Provenance note.* This reference campaign (`runs/demo-reference/`) used the earlier
+ICP-based objectives and the UV-Vis step, so the current code refuses to resume it; its
+numbers are a historical record. It was also recorded before a fix that made the simulator's per-experiment noise independent of Python's per-process hash salt. The stored results are the record of that run, but re-running the same command now gives different (and, from now on, reproducible) numbers.
 
 ![XRD pattern of the best simulated sample](figures/best_pattern.png)
 
@@ -360,3 +365,7 @@ python scripts/plot_mixing_energies.py
 - `ProvenanceStore` takes a *directory*, not a SQLite path. Tests must use `tmp_path`.
 - Long DFT scans checkpoint after every point (`runs/dft/lattice_scan.json`) and can be resumed.
 - Quote numbers from `docs/key_results.json`; do not retype values.
+
+## Acknowledgements
+
+This project has received funding under the grant agreement with the Research Council of Lithuania (LMTLT) (Project No. S-ITP-24-7).

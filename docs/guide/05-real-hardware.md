@@ -21,7 +21,6 @@ stations (`vessel_id`, `experiment_id`, `station`, `contents_mL`, `solid_present
 | | `wash(solid, cycles=3, solvent="water")`, `dry(solid, temperature_C=70.0, duration_s=3600.0)` | `VesselHandle` |
 | | `weigh(solid)` | dry mass in mg |
 | `Diffractometer` | `measure(solid, two_theta_range, step_deg, exposure_s)` | `XRDPattern` |
-| `Spectrophotometer` | `measure(liquid, dilution_factor, wavelength_range)` | `UVVisSpectrum` |
 | `ElementalAnalyzer` | `measure(solid, elements)` | `ICPResult` |
 
 The data types a driver must return (`pba_autoworkflow.schema`):
@@ -29,7 +28,6 @@ The data types a driver must return (`pba_autoworkflow.schema`):
 | Type | Fields |
 |---|---|
 | `XRDPattern` | `two_theta_deg` (array), `intensity` (array), `wavelength_A`, `exposure_s` |
-| `UVVisSpectrum` | `wavelength_nm` (array), `absorbance` (array), `path_length_cm`, `dilution_factor` |
 | `ICPResult` | `concentrations_mol_L` (dict, element → mol/L in the digest), `digest_mass_mg`, `digest_volume_mL`, `dry_mass_mg`, `carbon_wt_pct` |
 
 ## Writing a driver
@@ -66,8 +64,8 @@ platform, _ = build_simulated_platform(seed=0, time_scale=0.0)
 platform = dataclasses.replace(platform, diffractometer=MyDiffractometer("xrd-01"))
 ```
 
-A real deck uses the same constructor with all six real drivers:
-`Platform(liquid_handler=…, reactor=…, workup=…, diffractometer=…, spectrophotometer=…, elemental=…)`.
+A real deck uses the same constructor with all five real drivers:
+`Platform(liquid_handler=…, reactor=…, workup=…, diffractometer=…, elemental=…)`.
 
 **Mixed decks need care.** Simulated downstream instruments generate data from the simulator's
 record of each sample, so a real upstream instrument and a simulated downstream one will not

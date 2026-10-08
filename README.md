@@ -17,7 +17,10 @@ A Python orchestrator for an autonomous Materials Acceleration Platform targetin
 PBA cathode materials (Na<sub>x</sub>M[Fe(CN)<sub>6</sub>]<sub>1−y</sub>·zH<sub>2</sub>O,
 M = Mn, Fe, Co, Ni, Cu). It plans experiments, drives instruments, reduces raw
 traces to descriptors, records everything, and closes the loop with a constrained
-multi-objective optimizer.
+multi-objective optimizer. The current focus is phase formation, judged from powder
+XRD (phase purity and crystallinity).
+
+*This project has received funding under the grant agreement with the Research Council of Lithuania (LMTLT) (Project No. S-ITP-24-7).*
 
 The device layer is abstract. Simulated drivers ship with it so the whole loop
 runs end-to-end today; going live means implementing the same protocol against
@@ -188,13 +191,16 @@ characteristic silent failure of an automated platform.
 |---|---|
 | `SynthesisParameters` | one validated recipe |
 | `DesignSpace` | physical ↔ unit-cube encoding, one-hot categoricals |
-| `XRDPattern`, `UVVisSpectrum`, `ICPResult` | raw traces, as a driver returns them |
-| `XRDDescriptors`, `UVVisDescriptors`, `CompositionDescriptors` | reduced numbers |
+| `XRDPattern`, `ICPResult` | raw traces, as a driver returns them |
+| `XRDDescriptors`, `CompositionDescriptors` | reduced numbers |
 | `Objectives` | maximized values + feasibility constraints |
 | `Experiment` | lifecycle record, status, provenance refs |
 
-Objectives: maximize `na_inventory` (Na per formula unit / 2) and
-`framework_integrity` (1 − vacancy fraction), subject to isolated yield ≥ 0.35.
+Objectives (phase formation, from powder XRD): maximize `phase_purity` (PBA share of
+the Bragg intensity) and `crystallinity` (PBA Bragg intensity against Bragg plus
+amorphous halo), subject to isolated yield ≥ 0.35. ICP composition is recorded and
+used for the yield and charge-balance checks, but not optimized. A store recorded
+with different objectives is refused rather than mixed in; start a new campaign id.
 
 ## Provenance
 
@@ -213,8 +219,8 @@ python -m pytest tests/ -q
 
 The load-bearing tests are not the round-trips. They are the ones asserting that
 the analysis layer recovers the hidden truth from a simulated trace — lattice
-constant to <0.01 Å across the metal series and temperature range, conversion
-from a cloudy supernatant — and the ones asserting the loop survives hardware
+constant to <0.01 Å across the metal series and temperature range, phase
+purity in the presence of NaCl and hydroxide impurity lines — and the ones asserting the loop survives hardware
 faults, quarantines bad data instead of training on it, and never prefers an
 infeasible recipe. The regression block at the end of the suite encodes defects
 that reached a generated report before being caught; each test name describes the
@@ -275,6 +281,10 @@ If you use this software, please cite it using [`CITATION.cff`](CITATION.cff) (G
 *Cite this repository* button), and cite the methods and third-party software you rely on. All of
 them, with verified DOIs, are listed in [`REFERENCES.md`](REFERENCES.md); BibTeX is in
 [`docs/references.bib`](docs/references.bib).
+
+## Acknowledgements
+
+This project has received funding under the grant agreement with the Research Council of Lithuania (LMTLT) (Project No. S-ITP-24-7).
 
 ## License
 

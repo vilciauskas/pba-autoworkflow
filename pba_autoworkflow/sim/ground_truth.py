@@ -48,6 +48,13 @@ from ..schema import (
 )
 
 
+#: Solubility products of M(OH)2 at 25 C (textbook values, order of magnitude
+#: is what matters here); Cu(OH)2 is the precursor of the CuO seen by XRD.
+KSP_HYDROXIDE: dict[str, float] = {
+    "Mn": 1.9e-13, "Fe": 4.9e-17, "Co": 5.9e-15, "Ni": 5.5e-16, "Cu": 2.2e-20,
+}
+
+
 def _sigmoid(x: float) -> float:
     return 1.0 / (1.0 + math.exp(-x))
 
@@ -69,10 +76,14 @@ class LatentState:
     crystallinity: float
     isolated_yield: float
     conversion: float
-    residual_hcf_M: float
     capacity_mAh_g: float
     solid_mass_mg: float
     failed: bool = False
+    metal: str = ""
+    #: crystalline secondary phases, as integrated Bragg intensity relative to
+    #: a fully ordered PBA pattern (see ``simulate_xrd``)
+    nacl_fraction: float = 0.0
+    hydroxide_fraction: float = 0.0
     failure_mode: str | None = None
 
     @property
@@ -235,14 +246,22 @@ class GroundTruth:
         fw = formula_weight(p.metal, na, vacancy, water)
         solid_mass_mg = limiting_mol * isolated * fw * 1e3
 
-        residual_hcf = p.c_hcf_M * (p.volume_B_mL / p.total_volume_mL) * (1.0 - conversion)
-
         # -- electrochemical capacity proxy: Na inventory times utilization
         q_theo = theoretical_capacity_mAh_g(p.metal, na, vacancy, water)
         kinetic = _clip(1.06 / (1.0 + (d / 95.0) ** 1.7), 0.30, 1.0)
         defect = _clip(1.0 - 1.15 * vacancy, 0.15, 1.0)
         hydration = _clip(1.0 - 0.055 * water, 0.55, 1.0)
         capacity = q_theo * kinetic * defect * hydration * crystallinity ** 0.35
+
+        # -- crystalline secondary phases (seen by XRD only: their mass and Na
+        #    are deliberately not added to the gravimetric or ICP results)
+        # NaCl left in the powder when the supporting electrolyte is concentrated.
+        nacl_frac = 0.30 * _sigmoid((p.c_nacl_M - 2.6) / 0.30)
+        # M(OH)2 once pH passes the solubility-product onset for the *free* metal;
+        # citrate is taken to bind M2+ 1:1, which delays the onset.
+        free_m = max(p.c_metal_M - p.c_citrate_M, 0.03 * p.c_metal_M)
+        ph_onset = 14.0 + 0.5 * math.log10(KSP_HYDROXIDE[p.metal] / free_m)
+        hydroxide_frac = 0.40 * _sigmoid((p.ph - ph_onset) / 0.25)
 
         state = LatentState(
             na_per_fu=na,
@@ -254,9 +273,11 @@ class GroundTruth:
             crystallinity=crystallinity,
             isolated_yield=isolated,
             conversion=conversion,
-            residual_hcf_M=residual_hcf,
             capacity_mAh_g=capacity,
             solid_mass_mg=solid_mass_mg,
+            metal=p.metal,
+            nacl_fraction=nacl_frac,
+            hydroxide_fraction=hydroxide_frac,
         )
         return self._apply_noise_and_failures(state, rng)
 

@@ -95,3 +95,20 @@ def test_simulated_noise_is_independent_of_python_hash_salt():
     outs = {subprocess.run([sys.executable, "-c", code], capture_output=True, text=True, check=True,
                            env={**os.environ, "PYTHONHASHSEED": s}).stdout for s in ("1", "2", "3")}
     assert len(outs) == 1, outs
+
+
+def test_campaign_recorded_with_other_objectives_is_refused(tmp_path):
+    """A store scored on different objectives must not be mixed into the new loop."""
+    import json, pytest
+    from pba_autoworkflow import CampaignConfig, ProvenanceStore, build_simulated_platform
+    from pba_autoworkflow.campaign import Campaign
+    platform, _ = build_simulated_platform(seed=1, time_scale=0.0)
+    cfg = CampaignConfig(campaign_id="old", n_seed=4, batch_size=4, max_experiments=4, seed=1)
+    store = ProvenanceStore(tmp_path / "prov")
+    camp = Campaign(platform, store, cfg)
+    asyncio.run(camp.run(1))
+    exp = next(e for e in camp.history if e.objectives is not None)
+    exp.objectives.values = {"na_inventory": 0.5, "framework_integrity": 0.9}
+    store.finalize_experiment(exp)
+    with pytest.raises(ValueError, match="start a new campaign id"):
+        Campaign(build_simulated_platform(seed=1, time_scale=0.0)[0], ProvenanceStore(tmp_path / "prov"), cfg)

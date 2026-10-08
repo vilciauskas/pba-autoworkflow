@@ -329,19 +329,6 @@ class XRDPattern:
 
 
 @dataclass
-class UVVisSpectrum:
-    """Absorbance spectrum of the reaction supernatant."""
-
-    wavelength_nm: np.ndarray
-    absorbance: np.ndarray
-    path_length_cm: float = 1.0
-    dilution_factor: float = 1.0
-
-    def as_arrays(self) -> dict[str, np.ndarray]:
-        return {"wavelength_nm": self.wavelength_nm, "absorbance": self.absorbance}
-
-
-@dataclass
 class ICPResult:
     """Elemental assay of the digested, washed, dried powder.
 
@@ -376,13 +363,12 @@ class XRDDescriptors(BaseModel):
     phase: Literal["cubic", "rhombohedral", "monoclinic", "amorphous"]
     n_peaks_indexed: int
     fit_residual: float
-
-
-class UVVisDescriptors(BaseModel):
-    residual_hcf_M: float
-    a_420: float
-    conversion: float = Field(..., ge=0.0, le=1.0)
-    ivct_lambda_max_nm: float | None = None
+    #: PBA share of the Bragg intensity, 0-1.  An *intensity* fraction, not a
+    #: weight fraction (that would need reference intensity ratios).  None for
+    #: results recorded before secondary phases were analysed.
+    phase_purity: float | None = Field(default=None, ge=0.0, le=1.0)
+    #: fitted peaks that index to no PBA reflection (candidate impurity lines)
+    n_impurity_peaks: int = 0
 
 
 class CompositionDescriptors(BaseModel):
@@ -431,7 +417,6 @@ class SampleDescriptors(BaseModel):
     """Everything the analysis layer extracted for one sample."""
 
     xrd: XRDDescriptors | None = None
-    uvvis: UVVisDescriptors | None = None
     composition: CompositionDescriptors | None = None
     isolated_yield: float | None = Field(default=None, ge=0.0, le=1.2)
     capacity_mAh_g: float | None = None
@@ -441,8 +426,7 @@ class SampleDescriptors(BaseModel):
             "isolated_yield": self.isolated_yield,
             "capacity_mAh_g": self.capacity_mAh_g,
         }
-        for prefix, block in (("xrd", self.xrd), ("uvvis", self.uvvis),
-                              ("comp", self.composition)):
+        for prefix, block in (("xrd", self.xrd), ("comp", self.composition)):
             if block is None:
                 continue
             for k, v in block.model_dump().items():

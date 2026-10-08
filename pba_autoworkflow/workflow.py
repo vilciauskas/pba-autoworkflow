@@ -22,7 +22,7 @@ from dataclasses import dataclass, field
 from typing import Awaitable, Callable, TypeVar
 
 from .analysis.objectives import compute_objectives, quality_flags
-from .analysis.spectra import analyze_icp, analyze_uvvis, estimate_capacity_mAh_g
+from .analysis.spectra import analyze_icp, estimate_capacity_mAh_g
 from .analysis.xrd import analyze_pattern
 from .devices.base import (
     ConsumableExhausted,
@@ -51,8 +51,6 @@ class WorkflowConfig:
     xrd_range: tuple[float, float] = (10.0, 60.0)
     xrd_step_deg: float = 0.02
     xrd_exposure_s: float = 120.0
-    uvvis_range: tuple[float, float] = (300.0, 800.0)
-    uvvis_dilution: float = 10.0
     wash_cycles: int = 3
     dry_temperature_C: float = 70.0
     dry_duration_s: float = 3600.0
@@ -256,23 +254,6 @@ class ExperimentWorkflow:
                 trace.add("xrd", True, t0)
             return analyze_pattern(pattern)
 
-        async def do_uvvis():
-            sp = self.platform.spectrophotometer
-            async with await self._station("spectrophotometer"):
-                t0 = tick()
-                spectrum = await self._call(
-                    exp, sp.device_id, "uvvis_scan",
-                    lambda: sp.measure(liquid, cfg.uvvis_dilution, cfg.uvvis_range),
-                )
-                ref = self.store.save_trace(
-                    exp.experiment_id, "uvvis", sp.device_id, spectrum.as_arrays(),
-                    {"dilution_factor": spectrum.dilution_factor,
-                     "path_length_cm": spectrum.path_length_cm},
-                )
-                exp.raw_refs["uvvis"] = ref
-                trace.add("uvvis", True, t0)
-            return analyze_uvvis(spectrum, exp.parameters)
-
         async def do_icp():
             ea = self.platform.elemental
             async with await self._station("elemental"):
@@ -287,20 +268,15 @@ class ExperimentWorkflow:
                 trace.add("icp", True, t0)
             return analyze_icp(icp, exp.parameters)
 
-        # The three characterizations are independent; run them concurrently and
-        # let a failure in one leave the others usable.
+        # The two characterizations are independent; run them concurrently and
+        # let a failure in one leave the other usable.
         t_char = tick()
-        results = await asyncio.gather(do_xrd(), do_uvvis(), do_icp(),
-                                       return_exceptions=True)
-        xrd_res, uv_res, icp_res = results
+        results = await asyncio.gather(do_xrd(), do_icp(), return_exceptions=True)
+        xrd_res, icp_res = results
         if not isinstance(xrd_res, BaseException):
             desc.xrd = xrd_res
         else:
             trace.add("xrd", False, t_char, str(xrd_res))
-        if not isinstance(uv_res, BaseException):
-            desc.uvvis = uv_res
-        else:
-            trace.add("uvvis", False, t_char, str(uv_res))
         if not isinstance(icp_res, BaseException):
             desc.composition = icp_res
         else:

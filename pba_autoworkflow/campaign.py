@@ -142,6 +142,13 @@ class Campaign:
                 self.space.model_dump_json(),
             )
         self.history: list[Experiment] = store.load_campaign(self.config.campaign_id)
+        stale = sorted({k for e in self.history if e.objectives is not None
+                        for k in e.objectives.values} - set(OBJECTIVE_NAMES))
+        if stale:
+            raise ValueError(
+                f"campaign {self.config.campaign_id!r} was recorded with objectives "
+                f"{stale}, but this version optimises {list(OBJECTIVE_NAMES)}; "
+                "its results cannot be combined -- start a new campaign id")
         # Iteration records are logged as ``iteration_complete`` events; reload
         # them so a resumed campaign (or a report built from the store) keeps its
         # hypervolume trajectory, its iteration numbering, and the convergence

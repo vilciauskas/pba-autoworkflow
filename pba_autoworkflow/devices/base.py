@@ -30,7 +30,7 @@ from enum import Enum
 from typing import Protocol, Sequence, runtime_checkable
 
 from ..clock import timestamp
-from ..schema import ICPResult, SynthesisParameters, UVVisSpectrum, XRDPattern
+from ..schema import ICPResult, SynthesisParameters, XRDPattern
 
 
 class DeviceError(RuntimeError):
@@ -191,14 +191,6 @@ class Diffractometer(Protocol):
 
 
 @runtime_checkable
-class Spectrophotometer(Protocol):
-    device_id: str
-
-    async def measure(self, liquid: VesselHandle, dilution_factor: float,
-                      wavelength_range: tuple[float, float]) -> UVVisSpectrum: ...
-
-
-@runtime_checkable
 class ElementalAnalyzer(Protocol):
     device_id: str
 
@@ -214,13 +206,12 @@ class Platform:
     reactor: Reactor
     workup: Workup
     diffractometer: Diffractometer
-    spectrophotometer: Spectrophotometer
     elemental: ElementalAnalyzer
 
     def all_devices(self) -> list[Device]:
         seen: dict[str, Device] = {}
         for obj in (self.liquid_handler, self.reactor, self.workup,
-                    self.diffractometer, self.spectrophotometer, self.elemental):
+                    self.diffractometer, self.elemental):
             if isinstance(obj, Device):
                 seen[obj.device_id] = obj
         return list(seen.values())

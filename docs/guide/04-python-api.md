@@ -46,15 +46,15 @@ store.close()
 Output:
 
 ```
-iteration 0: HV=0.5721 (Δ+0.5721) best=0.3253 counts={'complete': 7, 'quarantined': 1} …
-iteration 1: HV=0.5780 (Δ+0.0059) best=0.3285 counts={'failed': 2, 'complete': 4} …
-iteration 2: HV=0.6550 (Δ+0.0770) best=0.3710 counts={'failed': 1, 'complete': 2, 'quarantined': 3} …
+iteration 0: HV=0.6712 (Δ+0.6712) best=0.3774 counts={'complete': 8} …
+iteration 1: HV=0.7051 (Δ+0.0340) best=0.3952 counts={'complete': 5, 'failed': 1} …
+iteration 2: HV=0.7176 (Δ+0.0125) best=0.4018 counts={'failed': 1, 'complete': 5} …
 
-hypervolume per iteration: [0.572, 0.578, 0.655]
-best: example-b02-e01 Mn Na0.73Mn[Fe(CN)6]0.92·1.4H2O
+hypervolume per iteration: [0.671, 0.705, 0.718]
+best: example-b02-e03 Cu Na0.96Cu[Fe(CN)6]0.95·1.6H2O
 ```
 
-All 20 experiments used only the four allowed metals, and none exceeded 80 °C (maximum 77.5 °C).
+All 20 experiments used only the four allowed metals, and none exceeded 80 °C (maximum 78.2 °C).
 
 `Campaign.run()` is a coroutine. Inside an existing event loop (for example Jupyter), use
 `await campaign.run()` instead of `asyncio.run(...)`.

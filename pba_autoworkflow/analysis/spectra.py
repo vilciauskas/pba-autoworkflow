@@ -119,11 +119,6 @@ def estimate_capacity_mAh_g(comp: CompositionDescriptors, domain_size_nm: float,
     q_theo = theoretical_capacity_mAh_g(
         metal, comp.na_per_fu, comp.vacancy_fraction, comp.water_per_fu
     )
-    # Apply redox cap: Ni and Cu PBAs have only 1 electrochemically active site (Fe)
-    if metal in ("Ni", "Cu") and comp.na_per_fu > 0:
-        active_na = min(comp.na_per_fu, 1.0 - comp.vacancy_fraction)
-        q_theo *= (active_na / comp.na_per_fu)
-
     if not math.isfinite(domain_size_nm) or domain_size_nm <= 0:
         return float("nan")
     kinetic = float(np.clip(1.06 / (1.0 + (domain_size_nm / 95.0) ** 1.7), 0.30, 1.0))

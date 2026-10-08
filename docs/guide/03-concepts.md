@@ -109,9 +109,7 @@ A run is quarantined when any of these hold:
 - no diffraction data; or, for a crystalline pattern, fewer than the required number of indexed
   reflections or no lattice constant. An **amorphous** product is not quarantined: it is a real
   outcome of the recipe and scores low on both objectives;
-- lattice constant outside the window for that metal (for example 10.18–10.88 Å for Mn), or
-  more than 0.1 Å from the value predicted from the measured composition
-  (*a*₀ − 0.4 *y* + 0.1 Na per formula unit);
+- lattice constant outside the window for that metal (for example 10.18–10.88 Å for Mn);
 - a large indexing residual, or an implausible domain size;
 - no elemental assay, or a vacancy fraction that the assay cannot determine;
 - Na above the charge-balance ceiling, or Fe/M above the framework stoichiometry;

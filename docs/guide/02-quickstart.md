@@ -35,26 +35,21 @@ pba-autoworkflow run --runs runs/demo --campaign-id demo --iterations 3 --batch-
 ```
 iteration 0: running 12 experiments (sobol)
   demo-b00-e01 failed — hardware: rx-01: over-temperature interlock tripped during ramp
-  demo-b00-e10 quarantined — lattice a=10.464 A inconsistent with composition (expected ~10.64 A via Vegard's law)
-iteration 0: HV=0.6416 (Δ+0.6416) best=0.3619 counts={'complete': 10, 'failed': 1, 'quarantined': 1} …
+iteration 0: HV=0.6416 (Δ+0.6416) best=0.3619 counts={'complete': 11, 'failed': 1} …
 iteration 1: running 8 experiments (qnehvi, replicate)
-  demo-b01-e02 quarantined — lattice a=10.157 A inconsistent with composition (expected ~10.26 A via Vegard's law)
   demo-b01-e05 failed — hardware: wu-01: pellet lost during decant
-  demo-b01-e07 quarantined — lattice a=10.163 A inconsistent with composition (expected ~10.29 A via Vegard's law)
-iteration 1: HV=0.7196 (Δ+0.0780) best=0.4028 counts={'complete': 5, 'quarantined': 2, 'failed': 1} …
+iteration 1: HV=0.7458 (Δ+0.1041) best=0.4165 counts={'complete': 7, 'failed': 1} …
 iteration 2: running 8 experiments (qnehvi, replicate)
-  demo-b02-e04 quarantined — lattice a=10.184 A inconsistent with composition (expected ~10.29 A via Vegard's law)
-  demo-b02-e07 quarantined — lattice a=10.185 A inconsistent with composition (expected ~10.29 A via Vegard's law)
-iteration 2: HV=0.7227 (Δ+0.0031) best=0.4044 counts={'complete': 6, 'quarantined': 2} …
+iteration 2: HV=0.7458 (Δ+0.0000) best=0.4165 counts={'complete': 8} …
 …
 best recipe:
-  metal                  Ni
-  c_metal_M              0.010000000000000004
+  metal                  Fe
+  c_metal_M              0.012345859114945736
   …
-  -> Na0.64Ni[Fe(CN)6]0.90·1.6H2O  capacity 36.0 mAh/g  yield 0.41
+  -> Na1.14Fe[Fe(CN)6]0.95·1.7H2O  capacity 65.9 mAh/g  yield 0.46
 platform reproducibility (relative SD over replicate groups):
   rsd_phase_purity         0.0000
-  rsd_crystallinity        0.0533
+  rsd_crystallinity        0.0751
   n_replicate_groups       1.0000
 ```
 
@@ -72,10 +67,7 @@ What happened:
   It can only rise or stay level as data accumulate.
 - Runs end in one of three states. **complete**: usable result. **failed**: an instrument fault,
   never counted against the recipe. **quarantined**: the data were produced but failed a physical
-  sanity check, so they are kept out of the model. Chapter 3 lists the checks. Here every
-  quarantine comes from the check of the lattice constant against the measured composition. The
-  simulator's lattice model does not follow that check's slopes, so on the simulated deck it
-  rejects some samples whose data are fine.
+  sanity check, so they are kept out of the model. Chapter 3 lists the checks.
 
 `--time-scale 0` skips all simulated instrument waiting. Use `2e-4` to see realistic contention
 between stations within seconds, or `1.0` for a full-length timing rehearsal.
@@ -99,7 +91,7 @@ pba-autoworkflow resume --runs runs/demo --iterations 1 --time-scale 0
 resumed demo with 28 experiments
 iteration 3: running 8 experiments (qnehvi, replicate)
   demo-b03-e01 failed — hardware: rx-01: over-temperature interlock tripped during ramp
-iteration 3: HV=0.7227 (Δ+0.0000) best=0.4044 counts={'complete': 7, 'failed': 1} …
+iteration 3: HV=0.7458 (Δ+0.0000) best=0.4165 counts={'complete': 7, 'failed': 1} …
 ```
 
 The resumed batch continues the numbering (iteration 3) and the model is rebuilt from the stored
@@ -115,14 +107,14 @@ pba-autoworkflow status --runs runs/demo
 ```
 campaign      demo
 experiments   36
-status        {'complete': 28, 'failed': 3, 'quarantined': 5}
+status        {'complete': 33, 'failed': 3}
 next batch    4
 
 device        calls   busy_s   failed
-  icp-01          33      2.3       0
-  wu-01          133      1.4       1
-  rx-01          140      1.1       2
-  lh-01          143      0.7       1
+  icp-01          33      2.4       0
+  wu-01          133      1.5       1
+  rx-01          140      1.2       2
+  lh-01          143      0.8       1
   xrd-01          34      0.0       1
 ```
 
@@ -150,7 +142,7 @@ best_pattern   runs/demo/report/best_pattern.png
 
 ![Campaign overview](img/quickstart_overview.png)
 
-*Top left: hypervolume against experiments run, rising from 0.642 to 0.723 over four batches.
+*Top left: hypervolume against experiments run, rising from 0.642 to 0.746 after the second batch and level after that.
 Top right: phase purity against crystallinity for every run, coloured by batch; open circles
 failed the yield constraint, and the red diamond marks the Pareto front. Most runs reach a phase
 purity of 1.0, so crystallinity is what separates them. Bottom left: run outcomes per batch.
@@ -160,9 +152,10 @@ throughput.*
 
 ![Best sample XRD pattern](img/quickstart_best_pattern.png)
 
-*The best sample, demo-b02-e02, Na<sub>0.64</sub>Ni[Fe(CN)<sub>6</sub>]<sub>0.90</sub>·1.6H<sub>2</sub>O
-(*a* = 10.1996 Å, single phase): measured pattern, fitted background, and the background-stripped
-pattern used for peak fitting.*
+*The best sample, demo-b01-e07, Na<sub>1.14</sub>Fe[Fe(CN)<sub>6</sub>]<sub>0.95</sub>·1.7H<sub>2</sub>O
+(*a* = 10.1635 Å, single phase): measured pattern, fitted background, and the background-stripped
+pattern used for peak fitting. Unindexed lines from a secondary phase, when present, are marked
+with orange triangles.*
 
 ## Command reference
 

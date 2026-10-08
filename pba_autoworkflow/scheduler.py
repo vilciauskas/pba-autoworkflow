@@ -6,7 +6,7 @@ platform has one liquid handler, four reactor positions and one diffractometer,
 and two coroutines that both believe they own the diffractometer will produce two
 patterns of one sample and none of the other.
 
-:class:`StationPool` gives each station a capacity-bounded, FIFO-fair semaphore
+:class:`StationPool` gives each station a capacity-bounded, FIFO-fair set of slots
 and records queueing statistics, which is what turns "the campaign felt slow"
 into "the diffractometer was the bottleneck at 78 % occupancy while the reactor
 block sat at 20 %".
@@ -23,11 +23,13 @@ stranding material.
 from __future__ import annotations
 
 import asyncio
+import collections
 import contextlib
 from dataclasses import dataclass, field
 from typing import AsyncIterator, Awaitable, Callable, Sequence
 
 from .clock import tick, timestamp
+from .devices.base import HardwareFault
 from .schema import Experiment, ExperimentStatus
 
 
@@ -40,6 +42,8 @@ class StationStats:
     total_busy_s: float = 0.0
     max_wait_s: float = 0.0
     max_concurrent: int = 0
+    #: slots permanently taken out of service (e.g. a vessel stuck in a reactor position)
+    n_retired: int = 0
 
     @property
     def mean_wait_s(self) -> float:
@@ -51,29 +55,99 @@ class StationStats:
         return self.total_busy_s / (wall_s * self.capacity)
 
 
+class StationOutOfService(HardwareFault):
+    """Every slot of a station has been retired; nothing can run there until a human intervenes."""
+
+
+class _Slots:
+    """FIFO-fair counting slots whose capacity can be reduced while slots are held.
+
+    ``asyncio.Semaphore`` cannot shrink: retiring a slot means acquiring one and
+    never releasing it, which deadlocks if the caller already holds the last free
+    slot, and leaves queued waiters blocked forever once capacity reaches zero.
+    Here capacity is a plain counter; a retired slot simply is not handed on when
+    it is released, and when capacity reaches zero every waiter is failed.
+    """
+
+    def __init__(self, name: str, capacity: int) -> None:
+        self.name = name
+        self.capacity = capacity
+        self.in_use = 0
+        self._waiters: collections.deque[asyncio.Future[None]] = collections.deque()
+
+    def _out_of_service(self) -> StationOutOfService:
+        return StationOutOfService(f"{self.name}: all positions out of service")
+
+    async def acquire(self) -> None:
+        if self.capacity <= 0:
+            raise self._out_of_service()
+        if self.in_use < self.capacity and not self._waiters:
+            self.in_use += 1
+            return
+        fut: asyncio.Future[None] = asyncio.get_running_loop().create_future()
+        self._waiters.append(fut)
+        try:
+            await fut                     # resolved by _dispatch with the slot already counted
+        except asyncio.CancelledError:
+            if fut.done() and not fut.cancelled() and fut.exception() is None:
+                self.release()            # slot was handed over just as we were cancelled
+            raise
+
+    def release(self) -> None:
+        self.in_use -= 1
+        self._dispatch()
+
+    def retire(self) -> None:
+        self.capacity = max(0, self.capacity - 1)
+        self._dispatch()
+
+    def _dispatch(self) -> None:
+        while self._waiters and self.in_use < self.capacity:
+            fut = self._waiters.popleft()
+            if not fut.done():
+                self.in_use += 1
+                fut.set_result(None)
+        if self.capacity <= 0:
+            while self._waiters:
+                fut = self._waiters.popleft()
+                if not fut.done():
+                    fut.set_exception(self._out_of_service())
+
+
 class StationPool:
     """Named, capacity-limited stations with queueing telemetry."""
 
     def __init__(self, capacities: dict[str, int]) -> None:
-        self._sems = {k: asyncio.Semaphore(v) for k, v in capacities.items()}
+        self._slots = {k: _Slots(k, v) for k, v in capacities.items()}
         self._in_use = {k: 0 for k in capacities}
         self.stats = {k: StationStats(k, v) for k, v in capacities.items()}
         self._t_start = tick()
 
-    def decrement_capacity(self, name: str) -> None:
-        """Permanently consume one slot of capacity from the given station."""
-        if name in self._sems:
-            # Acquire without releasing to permanently lower available capacity
-            asyncio.create_task(self._sems[name].acquire())
-            self.stats[name].capacity = max(0, self.stats[name].capacity - 1)
+    def retire_slot(self, name: str) -> None:
+        """Permanently take one slot of ``name`` out of service.
+
+        Safe to call while the caller holds a slot of that station: the slot is
+        withdrawn when it is released rather than by acquiring another one.
+        Once every slot is retired, waiting and future acquisitions raise
+        :class:`StationOutOfService` instead of blocking.
+        """
+        if name not in self._slots:
+            raise KeyError(f"unknown station {name!r}; have {sorted(self._slots)}")
+        self._slots[name].retire()
+        self.stats[name].n_retired += 1
+
+    def available_capacity(self, name: str) -> int:
+        return self._slots[name].capacity
 
     @contextlib.asynccontextmanager
     async def acquire(self, name: str) -> AsyncIterator[None]:
-        if name not in self._sems:
-            raise KeyError(f"unknown station {name!r}; have {sorted(self._sems)}")
+        if name not in self._slots:
+            raise KeyError(f"unknown station {name!r}; have {sorted(self._slots)}")
         st = self.stats[name]
         t_queued = tick()
-        async with self._sems[name]:
+        slots = self._slots[name]
+        await slots.acquire()
+        try:
             wait = tick() - t_queued
             st.n_acquisitions += 1
             st.total_wait_s += wait
@@ -86,6 +160,8 @@ class StationPool:
             finally:
                 st.total_busy_s += tick() - t_busy
                 self._in_use[name] -= 1
+        finally:
+            slots.release()
 
     def wall_time_s(self) -> float:
         return tick() - self._t_start
@@ -102,6 +178,7 @@ class StationPool:
                 "mean_wait_s": round(s.mean_wait_s, 3),
                 "max_wait_s": round(s.max_wait_s, 3),
                 "max_concurrent": s.max_concurrent,
+                "retired": s.n_retired,
             }
             for s in sorted(self.stats.values(), key=lambda x: -x.total_busy_s)
         ]

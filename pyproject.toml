@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "pba-autoworkflow"
-version = "0.1.0"
+dynamic = ["version"]
 description = "Closed-loop orchestration for autonomous Prussian-blue-analogue synthesis"
 readme = "README.md"
 license = "GPL-3.0-or-later"
@@ -37,6 +37,9 @@ mace = ["ase>=3.23", "mace-torch"]
 
 [project.scripts]
 pba-autoworkflow = "pba_autoworkflow.cli:main"
+
+[tool.setuptools.dynamic]
+version = { attr = "pba_autoworkflow._version.__version__" }
 
 [tool.setuptools.packages.find]
 include = ["pba_autoworkflow*"]

@@ -204,8 +204,13 @@ class ExperimentWorkflow:
                         exp.metadata["reactor_vessel_ejected_after_fault"] = True
                     except Exception:  # noqa: BLE001
                         exp.metadata["reactor_vessel_stuck"] = True
-                        if self.pool is not None and hasattr(self.pool, "decrement_capacity"):
-                            self.pool.decrement_capacity("reactor")
+                        # The position is physically occupied until someone clears
+                        # it, so the scheduler must stop offering it.  The slot this
+                        # experiment holds is withdrawn on release; once every
+                        # position is retired, later experiments fail fast with
+                        # StationOutOfService instead of the campaign hanging.
+                        if self.pool is not None:
+                            self.pool.retire_slot("reactor")
                 raise
 
         async with await self._station("workup"):

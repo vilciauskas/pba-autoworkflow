@@ -41,11 +41,12 @@ from .schema import (
     SynthesisParameters,
 )
 
-import importlib.metadata
-try:
-    ANALYSIS_VERSION = importlib.metadata.version("pba-autoworkflow")
-except importlib.metadata.PackageNotFoundError:
-    ANALYSIS_VERSION = "unknown"
+from ._version import __version__
+
+#: Recorded with every result.  Tied to the package version, read from source so
+#: it is correct whether or not the package is pip-installed.  Stores written
+#: before this change carry the old, separately numbered "1.0.0".
+ANALYSIS_VERSION = __version__
 
 _SCHEMA = """
 CREATE TABLE IF NOT EXISTS campaigns (

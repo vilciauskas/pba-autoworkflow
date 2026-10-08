@@ -47,7 +47,7 @@ from .campaign import Campaign, CampaignConfig, run_campaign, run_campaign_sync
 from .workflow import ExperimentWorkflow, WorkflowConfig
 from .scheduler import BatchScheduler, StationPool, default_capacities
 
-__version__ = "0.1.0"
+from ._version import __version__
 
 __all__ = [
     "DesignSpace", "Experiment", "ExperimentStatus", "Objectives",

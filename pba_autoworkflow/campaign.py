@@ -400,11 +400,12 @@ class Campaign:
         """
         groups: dict[str, list[Experiment]] = {}
         for e in self.usable:
+            # Group on recipes rounded to 4 decimals, so that replicates entered by
+            # hand or re-read from an instrument log still group with the original
+            # even when the last digits of a float differ.
             dump = e.parameters.model_dump()
-            # Round floats to 4 decimal places for stable grouping
-            key_dict = {k: round(v, 4) if isinstance(v, float) else v for k, v in dump.items()}
-            import json
-            key = json.dumps(key_dict, sort_keys=True)
+            key = json.dumps({k: round(v, 4) if isinstance(v, float) else v
+                              for k, v in dump.items()}, sort_keys=True)
             groups.setdefault(key, []).append(e)
         reps = [g for g in groups.values() if len(g) > 1]
         if not reps:

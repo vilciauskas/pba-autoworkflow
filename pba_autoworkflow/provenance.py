@@ -41,7 +41,11 @@ from .schema import (
     SynthesisParameters,
 )
 
-ANALYSIS_VERSION = "1.0.0"
+import importlib.metadata
+try:
+    ANALYSIS_VERSION = importlib.metadata.version("pba-autoworkflow")
+except importlib.metadata.PackageNotFoundError:
+    ANALYSIS_VERSION = "unknown"
 
 _SCHEMA = """
 CREATE TABLE IF NOT EXISTS campaigns (

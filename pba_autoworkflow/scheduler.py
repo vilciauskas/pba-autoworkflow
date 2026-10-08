@@ -60,6 +60,13 @@ class StationPool:
         self.stats = {k: StationStats(k, v) for k, v in capacities.items()}
         self._t_start = tick()
 
+    def decrement_capacity(self, name: str) -> None:
+        """Permanently consume one slot of capacity from the given station."""
+        if name in self._sems:
+            # Acquire without releasing to permanently lower available capacity
+            asyncio.create_task(self._sems[name].acquire())
+            self.stats[name].capacity = max(0, self.stats[name].capacity - 1)
+
     @contextlib.asynccontextmanager
     async def acquire(self, name: str) -> AsyncIterator[None]:
         if name not in self._sems:

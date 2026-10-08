@@ -204,6 +204,8 @@ class ExperimentWorkflow:
                         exp.metadata["reactor_vessel_ejected_after_fault"] = True
                     except Exception:  # noqa: BLE001
                         exp.metadata["reactor_vessel_stuck"] = True
+                        if self.pool is not None and hasattr(self.pool, "decrement_capacity"):
+                            self.pool.decrement_capacity("reactor")
                 raise
 
         async with await self._station("workup"):

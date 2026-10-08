@@ -400,7 +400,11 @@ class Campaign:
         """
         groups: dict[str, list[Experiment]] = {}
         for e in self.usable:
-            key = e.parameters.model_dump_json()
+            dump = e.parameters.model_dump()
+            # Round floats to 4 decimal places for stable grouping
+            key_dict = {k: round(v, 4) if isinstance(v, float) else v for k, v in dump.items()}
+            import json
+            key = json.dumps(key_dict, sort_keys=True)
             groups.setdefault(key, []).append(e)
         reps = [g for g in groups.values() if len(g) > 1]
         if not reps:

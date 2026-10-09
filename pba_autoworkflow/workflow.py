@@ -18,11 +18,18 @@ consumed the material.
 from __future__ import annotations
 
 import asyncio
+import math
 from dataclasses import dataclass, field
 from typing import Awaitable, Callable, TypeVar
 
-from .analysis.objectives import compute_objectives, quality_flags
-from .analysis.spectra import analyze_icp, estimate_capacity_mAh_g
+from .analysis.echem import build_echem_descriptors
+from .analysis.objectives import OBJECTIVE_NAMES, compute_objectives, quality_flags
+from .analysis.spectra import (
+    analyze_icp,
+    analyze_ir,
+    charge_balance_residual,
+    estimate_capacity_mAh_g,
+)
 from .analysis.xrd import analyze_pattern
 from .devices.base import (
     ConsumableExhausted,
@@ -52,12 +59,22 @@ class WorkflowConfig:
     xrd_step_deg: float = 0.02
     xrd_exposure_s: float = 120.0
     wash_cycles: int = 3
-    #: drying temperature and atmosphere are recipe parameters
-    #: (``SynthesisParameters.dry_temperature_C`` / ``dry_atmosphere``)
+    #: drying temperature, pressure and gas are recipe parameters
+    #: (``SynthesisParameters.dry_temperature_C`` / ``dry_pressure_mbar`` / ``dry_gas``)
     dry_duration_s: float = 3600.0
-    icp_elements: tuple[str, ...] = ("Na", "Fe", "Mn", "Co", "Ni", "Cu", "Zn")
+    icp_elements: tuple[str, ...] = ("Na", "K", "Fe", "Mn", "Co", "Ni", "Cu", "Zn")
     #: framework phase whose weight fraction is the first objective
     target_phase: str = "pba_fm3m"
+    #: objectives scored for every run (see ``analysis.objectives.OBJECTIVE_CATALOGUE``)
+    objectives: tuple[str, ...] = OBJECTIVE_NAMES
+    #: run ATR-IR (Fe(II) share) when the platform has a spectrometer
+    run_ir: bool = True
+    #: electrochemistry: single-ion electrolytes (1 mol/L of each cation) and
+    #: mixed electrolytes for competitive insertion; empty = skip the stage
+    echem_single_ions: tuple[str, ...] = ()
+    echem_mixed_electrolytes: tuple[dict, ...] = ()
+    echem_current_mA_g: float = 100.0
+    echem_n_cycles: int = 20
     max_transport_retries: int = 2
     retry_backoff_s: float = 1.0
 
@@ -154,7 +171,7 @@ class ExperimentWorkflow:
             ))
             await self._call(exp, lh.device_id, "prepare_B", lambda: lh.prepare_solution(
                 vessel_b,
-                {"Na4FeCN6": p.c_hcf_M, "NaCl": p.c_nacl_M},
+                {p.hcf_precursor: p.c_hcf_M, "NaCl": p.c_nacl_M},
                 p.volume_B_mL,
             ))
             ph_actual = await self._call(exp, lh.device_id, "adjust_pH",
@@ -226,7 +243,8 @@ class ExperimentWorkflow:
             await self._call(exp, wu.device_id, "dry",
                              lambda: wu.dry(solid, exp.parameters.dry_temperature_C,
                                             self.config.dry_duration_s,
-                                            vacuum=exp.parameters.dry_atmosphere == "vacuum"))
+                                            pressure_mbar=exp.parameters.dry_pressure_mbar,
+                                            gas=exp.parameters.dry_gas))
             mass_mg = await self._call(exp, wu.device_id, "weigh",
                                        lambda: wu.weigh(solid))
             exp.metadata["dry_mass_mg"] = mass_mg
@@ -272,11 +290,24 @@ class ExperimentWorkflow:
                 trace.add("icp", True, t0)
             return analyze_icp(icp, exp.parameters)
 
-        # The two characterizations are independent; run them concurrently and
-        # let a failure in one leave the other usable.
+        async def do_ir():
+            ir_dev = self.platform.ir
+            if ir_dev is None or not cfg.run_ir:
+                return None
+            async with await self._station("ir"):
+                t0 = tick()
+                spec = await self._call(exp, ir_dev.device_id, "ir_scan",
+                                        lambda: ir_dev.measure(solid))
+                exp.raw_refs["ir"] = self.store.save_trace(
+                    exp.experiment_id, "ir", ir_dev.device_id, spec.as_arrays(), {})
+                trace.add("ir", True, t0)
+            return analyze_ir(spec)
+
+        # The characterizations are independent; run them concurrently and let a
+        # failure in one leave the others usable.
         t_char = tick()
-        results = await asyncio.gather(do_xrd(), do_icp(), return_exceptions=True)
-        xrd_res, icp_res = results
+        results = await asyncio.gather(do_xrd(), do_icp(), do_ir(), return_exceptions=True)
+        xrd_res, icp_res, ir_res = results
         if not isinstance(xrd_res, BaseException):
             desc.xrd = xrd_res
         else:
@@ -285,6 +316,19 @@ class ExperimentWorkflow:
             desc.composition = icp_res
         else:
             trace.add("icp", False, t_char, str(icp_res))
+        if not isinstance(ir_res, BaseException):
+            desc.ir = ir_res
+        else:
+            trace.add("ir", False, t_char, str(ir_res))
+        desc.drying_index = exp.parameters.drying_index
+        if desc.composition is not None and desc.ir is not None:
+            desc.charge_balance_residual = charge_balance_residual(
+                desc.composition, desc.ir.fe2_fraction)
+
+        if cfg.echem_single_ions or cfg.echem_mixed_electrolytes:
+            # Errors here are terminal for the run: an electrochemical objective
+            # without its measurement would be scored as the worst value.
+            desc.echem = await self._electrochemistry(exp, solid, desc, trace)
 
         # Isolated yield from the weighed mass against the measured formula.
         mass = exp.metadata.get("dry_mass_mg")
@@ -296,7 +340,8 @@ class ExperimentWorkflow:
                                p.c_hcf_M * p.volume_B_mL) * 1e-3
             fw = formula_weight(p.metal, desc.composition.na_per_fu,
                                 desc.composition.vacancy_fraction,
-                                desc.composition.water_per_fu)
+                                desc.composition.water_per_fu,
+                                desc.composition.k_per_fu)
             theo_mg = limiting_mol * fw * 1e3
             if theo_mg > 0:
                 desc.isolated_yield = min(float(mass / theo_mg), 1.2)
@@ -307,6 +352,64 @@ class ExperimentWorkflow:
                 desc.xrd.crystallinity_index, exp.parameters.metal,
             )
         return desc
+
+    async def _electrochemistry(self, exp: Experiment, solid: VesselHandle,
+                                desc: SampleDescriptors, trace: WorkflowTrace):
+        cfg = self.config
+        ec = self.platform.electrochem
+        if ec is None:
+            raise DeviceError("electrochemistry requested but the platform has no potentiostat")
+        ea = self.platform.elemental
+        single = {}
+        for ion in cfg.echem_single_ions:
+            async with await self._station("electrochem"):
+                t0 = tick()
+                single[ion] = await self._call(
+                    exp, ec.device_id, f"cycle_{ion}",
+                    lambda ion=ion: ec.cycle(solid, {ion: 1.0}, cfg.echem_current_mA_g,
+                                             cfg.echem_n_cycles), retryable=False)
+                exp.raw_refs[f"echem_{ion}"] = self.store.save_trace(
+                    exp.experiment_id, f"echem_{ion}", ec.device_id,
+                    single[ion].as_arrays(), {"electrolyte_M": {ion: 1.0}})
+                trace.add(f"echem_{ion}", True, t0)
+        mixed = []
+        for el in cfg.echem_mixed_electrolytes:
+            tag = "+".join(f"{k}{v:g}" for k, v in sorted(el.items()))
+            async with await self._station("electrochem"):
+                t0 = tick()
+                data = await self._call(
+                    exp, ec.device_id, f"cycle_{tag}",
+                    lambda el=el: ec.cycle(solid, dict(el), cfg.echem_current_mA_g,
+                                           cfg.echem_n_cycles), retryable=False)
+                exp.raw_refs[f"echem_{tag}"] = self.store.save_trace(
+                    exp.experiment_id, f"echem_{tag}", ec.device_id, data.as_arrays(),
+                    {"electrolyte_M": dict(el)})
+                trace.add(f"echem_{tag}", True, t0)
+            elements = tuple(sorted(set(el) | {"Fe", exp.parameters.metal}))
+            async with await self._station("elemental"):
+                electrode = await self._call(exp, ea.device_id, f"icp_electrode_{tag}",
+                                             lambda: ea.measure(data.electrode, elements))
+                electrolyte = await self._call(exp, ea.device_id, f"icp_electrolyte_{tag}",
+                                               lambda: ea.measure(data.electrolyte, ("Fe",)))
+            self.store.log_event("echem_digest", payload={
+                "electrolyte_M": dict(el), "electrode": electrode.concentrations_mol_L,
+                "spent_electrolyte": electrolyte.concentrations_mol_L},
+                campaign_id=exp.campaign_id, experiment_id=exp.experiment_id)
+            mixed.append((data, electrode, electrolyte))
+        # The framework's own metal (Zn in a zinc framework) cannot be assayed
+        # as inserted against the framework content; it is taken coulometrically.
+        c = desc.composition
+        if c is not None and not (math.isfinite(c.vacancy_fraction) and c.vacancy_fraction < 1):
+            c = None
+        fw = None
+        if c is not None:
+            from .schema import formula_weight
+            fw = formula_weight(exp.parameters.metal, c.na_per_fu, c.vacancy_fraction,
+                                c.water_per_fu, c.k_per_fu)
+        return build_echem_descriptors(single, mixed,
+                                       framework_metal=exp.parameters.metal,
+                                       formula_weight=fw,
+                                       fe_per_fu=(1.0 - c.vacancy_fraction) if c else None)
 
     # ------------------------------------------------------------------ #
     # Entry point
@@ -361,7 +464,8 @@ class ExperimentWorkflow:
             qc_flags = qc.flags
             if qc.passed:
                 exp.objectives = compute_objectives(exp.descriptors, exp.parameters,
-                                                    target_phase=self.config.target_phase)
+                                                    target_phase=self.config.target_phase,
+                                                    objectives=self.config.objectives)
                 exp.metadata["target_phase"] = self.config.target_phase
                 exp.status = ExperimentStatus.COMPLETE
             else:

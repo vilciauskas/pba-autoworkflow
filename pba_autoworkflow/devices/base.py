@@ -30,7 +30,7 @@ from enum import Enum
 from typing import Protocol, Sequence, runtime_checkable
 
 from ..clock import timestamp
-from ..schema import ICPResult, SynthesisParameters, XRDPattern
+from ..schema import EchemCycleData, ICPResult, IRSpectrum, SynthesisParameters, XRDPattern
 
 
 class DeviceError(RuntimeError):
@@ -176,8 +176,15 @@ class Workup(Protocol):
                    solvent: str = "water") -> VesselHandle: ...
 
     async def dry(self, solid: VesselHandle, temperature_C: float = 70.0,
-                  duration_s: float = 3600.0, vacuum: bool = False) -> VesselHandle:
-        """Dry the solid; ``vacuum`` selects dynamic vacuum instead of ambient air."""
+                  duration_s: float = 3600.0, pressure_mbar: float = 1013.0,
+                  gas: str = "ambient") -> VesselHandle:
+        """Dry the solid at ``temperature_C`` and total pressure ``pressure_mbar``.
+
+        ``gas`` is ``"ambient"`` (lab air, or the residual gas of a vacuum oven)
+        or ``"dry"`` (desiccant such as P2O5, or a dry-gas purge).  The rate of
+        water removal can select the polymorph, so a driver must deliver the
+        pressure and gas it is given or raise.
+        """
 
     async def weigh(self, solid: VesselHandle) -> float:
         """Dry mass in mg."""
@@ -196,7 +203,35 @@ class ElementalAnalyzer(Protocol):
     device_id: str
 
     async def measure(self, solid: VesselHandle,
-                      elements: Sequence[str]) -> ICPResult: ...
+                      elements: Sequence[str]) -> ICPResult:
+        """Digest and assay a sample: the dried powder, a cycled electrode
+        (``EchemCycleData.electrode``) or a spent electrolyte."""
+
+
+@runtime_checkable
+class IRSpectrometer(Protocol):
+    """ATR-IR on a few mg of the dried powder (non-destructive)."""
+
+    device_id: str
+
+    async def measure(self, solid: VesselHandle,
+                      wn_range_cm1: tuple[float, float] = (1950.0, 2300.0)) -> IRSpectrum: ...
+
+
+@runtime_checkable
+class Potentiostat(Protocol):
+    """Electrode preparation plus galvanostatic cycling.
+
+    Each call casts a fresh electrode from the powder, cycles it in the given
+    electrolyte (charge first, ending on a discharge, i.e. with the electrolyte
+    cations inserted) and returns the curves with handles to the cycled
+    electrode and the spent electrolyte for elemental analysis.
+    """
+
+    device_id: str
+
+    async def cycle(self, solid: VesselHandle, electrolyte_M: dict[str, float],
+                    current_mA_g: float, n_cycles: int) -> EchemCycleData: ...
 
 
 @dataclass
@@ -208,11 +243,14 @@ class Platform:
     workup: Workup
     diffractometer: Diffractometer
     elemental: ElementalAnalyzer
+    #: optional stations: run when present
+    ir: IRSpectrometer | None = None
+    electrochem: Potentiostat | None = None
 
     def all_devices(self) -> list[Device]:
         seen: dict[str, Device] = {}
         for obj in (self.liquid_handler, self.reactor, self.workup,
-                    self.diffractometer, self.elemental):
+                    self.diffractometer, self.elemental, self.ir, self.electrochem):
             if isinstance(obj, Device):
                 seen[obj.device_id] = obj
         return list(seen.values())

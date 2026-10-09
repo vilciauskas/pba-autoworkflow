@@ -63,6 +63,8 @@ the project logo are credited in [`docs/logo/README.md`](docs/logo/README.md), n
   - Patterson (1939). The Scherrer Formula for X-Ray Particle Size Determination. *Physical Review* **56**, 978-982. https://doi.org/10.1103/PhysRev.56.978
 - **Williamson–Hall analysis (domain size and microstrain)** — Williamson, Hall (1953). X-ray line broadening from filed aluminium and wolfram. *Acta Metallurgica* **1**, 22-31. https://doi.org/10.1016/0001-6160(53)90006-6
 - **Quantitative phase analysis from Rietveld scale factors (Hill–Howard relation)** — Hill, Howard (1987). Quantitative phase analysis from neutron powder diffraction data using the Rietveld method. *Journal of Applied Crystallography* **20**, 467-474. https://doi.org/10.1107/S0021889887086199
+- **Saturation vapour pressure of water (drying-rate index)** — Buck (1981). New Equations for Computing Vapor Pressure and Enhancement Factor. *Journal of Applied Meteorology* **20**, 1527-1532. https://doi.org/10.1175/1520-0450(1981)020<1527:NEFCVP>2.0.CO;2 (coefficients of Buck's 1996 revision of this formula).
+- **Drying-selected phase of zinc hexacyanoferrate (drying model, paper routes used for validation)** — Pilipavicius, Skarnulyte, Gece, Vilciauskas. Control of the Zinc Insertion Pathways in Zinc Hexacyanoferrate by Drying-Selected Phase and Structural Disorder. Manuscript.
 - **Spearman rank correlation (force-field validation)** — Spearman (1904). The Proof and Measurement of Association between Two Things. *The American Journal of Psychology* **15**, 72. https://doi.org/10.2307/1412159
 
 ## Reference crystal structures (`pba_autoworkflow/data/phases`)

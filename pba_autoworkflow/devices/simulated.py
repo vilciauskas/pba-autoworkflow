@@ -22,15 +22,20 @@ import numpy as np
 
 from ..clock import timestamp
 from ..schema import (
+    HCF_PRECURSORS,
+    EchemCycleData,
     ICPResult,
+    IRSpectrum,
     METALS,
     SynthesisParameters,
     XRDPattern,
 )
+from ..sim.electrochem import simulate_cycling
 from ..sim.ground_truth import GroundTruth, LatentState
 from ..sim.instruments import (
     simulate_gravimetric_yield,
     simulate_icp,
+    simulate_ir,
     simulate_xrd,
 )
 from .base import (
@@ -64,6 +69,7 @@ class _VesselRecord:
     stir_rate_rpm: float | None = None
     addition_rate_mL_min: float | None = None
     aging_time_h: float | None = None
+    hcf_precursor: str | None = None
 
     latent: LatentState | None = None
     supernatant_of: str | None = None
@@ -77,11 +83,18 @@ class _VesselRecord:
             return None
         if self.temperature_C is None or self.aging_time_h is None:
             return None
+        # Precursor from what was dispensed into this vessel (solution B's
+        # components are merged into A by the metered addition).
+        hcf = self.hcf_precursor or next((k for k in HCF_PRECURSORS if k in self.components),
+                                         "Na4FeCN6")
         try:
+            # Drying is not part of this: it is applied to the solid when the
+            # workup's dry step runs, with the conditions that step was given.
             return SynthesisParameters(
                 metal=self.metal,  # type: ignore[arg-type]
+                hcf_precursor=hcf,  # type: ignore[arg-type]
                 c_metal_M=self.components.get(self.metal, 0.0),
-                c_hcf_M=self.components.get("Na4FeCN6", 0.0),
+                c_hcf_M=self.components.get(hcf, 0.0),
                 c_nacl_M=self.components.get("NaCl", 0.0),
                 c_citrate_M=self.components.get("citrate", 0.0),
                 ph=self.ph_actual if self.ph_actual is not None else 7.0,
@@ -109,6 +122,8 @@ class SimulatedBackend:
     vessels: dict[str, _VesselRecord] = field(default_factory=dict, init=False)
     tips_remaining: int = 4000
     call_log: list[tuple[float, str, str]] = field(default_factory=list, init=False)
+    #: cycled electrodes and spent electrolytes, for the elemental analyzer
+    echem_samples: dict[str, dict] = field(default_factory=dict, init=False)
 
     def __post_init__(self) -> None:
         self._rng = np.random.default_rng(self.seed)
@@ -178,6 +193,8 @@ class SimulatedLiquidHandler(_SimDevice):
         for key in components:
             if key in METALS:
                 rec.metal = key
+            if key in HCF_PRECURSORS:
+                rec.hcf_precursor = key
         vessel.contents_mL = volume_mL
         return vessel
 
@@ -265,7 +282,7 @@ class SimulatedReactor(_SimDevice):
         if effective is not None and rec.latent is None:
             # The chemistry resolves here: this is where the solid actually forms,
             # under the conditions the deck actually delivered.
-            rec.latent = self.backend.ground_truth.latent(
+            rec.latent = self.backend.ground_truth.precipitate(
                 effective, self.backend.rng_for(vessel.experiment_id)
             )
             vessel.solid_present = not rec.latent.failed
@@ -318,10 +335,16 @@ class SimulatedWorkup(_SimDevice):
         return solid
 
     async def dry(self, solid: VesselHandle, temperature_C: float = 70.0,
-                  duration_s: float = 3600.0, vacuum: bool = False) -> VesselHandle:
-        # The latent state already reflects the recipe's drying conditions.
+                  duration_s: float = 3600.0, pressure_mbar: float = 1013.0,
+                  gas: str = "ambient") -> VesselHandle:
         self._require_ready()
         await self.backend.dwell(duration_s, self.device_id, f"dry:{solid.vessel_id}")
+        rec = self.backend.record(solid.vessel_id)
+        if rec.latent is not None:
+            # The solid changes here, under the conditions actually commanded.
+            self.backend.ground_truth.dry(
+                rec.latent, temperature_C, pressure_mbar, gas,
+                self.backend.rng_for(solid.experiment_id + ":dry"))
         return solid
 
     async def weigh(self, solid: VesselHandle) -> float:
@@ -369,13 +392,103 @@ class SimulatedElementalAnalyzer(_SimDevice):
     async def measure(self, solid: VesselHandle,
                       elements: Sequence[str]) -> ICPResult:
         self._require_ready()
+        sample = self.backend.echem_samples.get(solid.vessel_id)
+        if sample is not None:
+            async with self._lock:
+                await self.backend.dwell(900.0, self.device_id, f"icp:{solid.vessel_id}")
+            return _icp_of_echem_sample(sample, elements,
+                                        self.backend.rng_for(solid.vessel_id + ":icp"))
         rec = self.backend.record(solid.vessel_id)
         if rec.latent is None or rec.params is None:
             raise HardwareFault(f"{self.device_id}: no digest available")
         async with self._lock:
             await self.backend.dwell(900.0, self.device_id, f"icp:{solid.vessel_id}")
         return simulate_icp(rec.latent, rec.params,
-                            self.backend.rng_for(solid.experiment_id))
+                            self.backend.rng_for(solid.experiment_id), elements=elements)
+
+
+def _icp_of_echem_sample(sample: dict, elements: Sequence[str],
+                         rng: np.random.Generator) -> ICPResult:
+    """Digest of a cycled electrode, or the spent electrolyte (Fe only matters)."""
+    vol_mL = 10.0
+    if sample["kind"] == "electrode":
+        n_fu = sample["active_mass_mg"] * 1e-3 / sample["formula_weight"]
+        mol = {"Fe": n_fu * sample["fe_per_fu"]}
+        mol[sample["metal"]] = mol.get(sample["metal"], 0.0) + n_fu
+        for ion, x in sample["inserted"].items():
+            mol[ion] = mol.get(ion, 0.0) + n_fu * x
+        mass = sample["active_mass_mg"]
+    else:
+        mol = {"Fe": sample["fe_mol"]}
+        vol_mL = sample["volume_mL"]
+        mass = float("nan")
+    conc = {el: float(max(0.0, m / (vol_mL * 1e-3) * (1.0 + rng.normal(0.0, 0.02))))
+            for el, m in mol.items() if el in elements}
+    return ICPResult(concentrations_mol_L=conc, digest_mass_mg=mass,
+                     digest_volume_mL=vol_mL, dry_mass_mg=mass)
+
+
+class SimulatedIRSpectrometer(_SimDevice):
+    capacity = 1
+
+    async def measure(self, solid: VesselHandle,
+                      wn_range_cm1: tuple[float, float] = (1950.0, 2300.0)) -> IRSpectrum:
+        self._require_ready()
+        self.backend.maybe_transport_fault(self.device_id)
+        rec = self.backend.record(solid.vessel_id)
+        if rec.latent is None:
+            raise HardwareFault(f"{self.device_id}: no sample on the ATR crystal")
+        async with self._lock:
+            await self.backend.dwell(120.0, self.device_id, f"ir:{solid.vessel_id}")
+        return simulate_ir(rec.latent, self.backend.rng_for(solid.experiment_id + ":ir"),
+                           self.backend.ground_truth.ir_absorptivity_ratio, wn_range_cm1)
+
+
+class SimulatedPotentiostat(_SimDevice):
+    """Multichannel potentiostat with automated electrode casting (flooded cells)."""
+
+    capacity = 4
+    #: active mass per electrode and electrolyte per cell
+    active_mass_mg = 3.0
+    electrolyte_volume_mL = 20.0
+
+    async def cycle(self, solid: VesselHandle, electrolyte_M: dict[str, float],
+                    current_mA_g: float = 100.0, n_cycles: int = 20) -> EchemCycleData:
+        self._require_ready()
+        self.backend.maybe_transport_fault(self.device_id)
+        rec = self.backend.record(solid.vessel_id)
+        if rec.latent is None:
+            raise HardwareFault(f"{self.device_id}: no powder to cast an electrode from")
+        tag = "+".join(f"{k}{v:g}" for k, v in sorted(electrolyte_M.items()))
+        rng = self.backend.rng_for(f"{solid.experiment_id}:ec:{tag}")
+        self.backend.maybe_mechanical_fault(self.device_id, "cell short circuit")
+        out = simulate_cycling(rec.latent, electrolyte_M, rng,
+                               self.backend.ground_truth.echem_offsets,
+                               n_cycles=n_cycles, current_mA_g=current_mA_g)
+        q_mean = float(np.mean([q[-1] for q in out["discharge_q"]])) or 1.0
+        async with self._lock:
+            await self.backend.dwell(2 * n_cycles * 3600.0 * q_mean / max(current_mA_g, 1e-6),
+                                     self.device_id, f"cycle:{solid.vessel_id}:{tag}")
+        lat = rec.latent
+        electrode = VesselHandle(f"{solid.vessel_id}-E-{tag}", solid.experiment_id,
+                                 station=self.device_id, solid_present=True)
+        electrolyte = VesselHandle(f"{solid.vessel_id}-L-{tag}", solid.experiment_id,
+                                   station=self.device_id, contents_mL=self.electrolyte_volume_mL)
+        fe_per_fu = 1.0 - lat.vacancy_fraction
+        n_fu = self.active_mass_mg * 1e-3 / out["formula_weight"]
+        self.backend.echem_samples[electrode.vessel_id] = dict(
+            kind="electrode", metal=lat.metal, inserted=out["inserted"], fe_per_fu=fe_per_fu,
+            active_mass_mg=self.active_mass_mg, formula_weight=out["formula_weight"])
+        self.backend.echem_samples[electrolyte.vessel_id] = dict(
+            kind="electrolyte", volume_mL=self.electrolyte_volume_mL,
+            fe_mol=n_fu * fe_per_fu * out["dissolved_fe_fraction"])
+        return EchemCycleData(
+            electrolyte_M=dict(electrolyte_M), current_mA_g=current_mA_g,
+            reference="Zn2+/Zn", charge_q=out["charge_q"], charge_E=out["charge_E"],
+            discharge_q=out["discharge_q"], discharge_E=out["discharge_E"],
+            electrode=electrode, electrolyte=electrolyte,
+            active_mass_mg=self.active_mass_mg,
+            electrolyte_volume_mL=self.electrolyte_volume_mL)
 
 
 def build_simulated_platform(
@@ -386,6 +499,8 @@ def build_simulated_platform(
     transport_fault_rate: float = 0.0,
     mechanical_fault_rate: float = 0.0,
     reactor_capacity: int = 4,
+    with_ir: bool = True,
+    with_electrochem: bool = True,
 ) -> tuple[Platform, SimulatedBackend]:
     """Assemble a complete simulated platform and return it with its backend."""
     backend = SimulatedBackend(
@@ -402,5 +517,7 @@ def build_simulated_platform(
         workup=SimulatedWorkup("wu-01", backend),
         diffractometer=SimulatedDiffractometer("xrd-01", backend),
         elemental=SimulatedElementalAnalyzer("icp-01", backend),
+        ir=SimulatedIRSpectrometer("ir-01", backend) if with_ir else None,
+        electrochem=SimulatedPotentiostat("ec-01", backend) if with_electrochem else None,
     )
     return platform, backend

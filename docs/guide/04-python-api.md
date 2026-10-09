@@ -46,15 +46,15 @@ store.close()
 Output:
 
 ```
-iteration 0: HV=0.6483 (Δ+0.6483) best=0.3653 counts={'complete': 8} …
-iteration 1: HV=0.6916 (Δ+0.0433) best=0.3881 counts={'complete': 5, 'failed': 1} …
-iteration 2: HV=0.7206 (Δ+0.0290) best=0.4033 counts={'failed': 1, 'complete': 5} …
+iteration 0: HV=0.4280 (Δ+0.4280) best=0.2823 counts={'complete': 7, 'quarantined': 1} …
+iteration 1: HV=0.5879 (Δ+0.1599) best=0.3394 counts={'failed': 1, 'complete': 5} …
+iteration 2: HV=0.5886 (Δ+0.0007) best=0.3394 counts={'complete': 6} …
 
-hypervolume per iteration: [0.648, 0.692, 0.721]
-best: example-b02-e03 Ni Na0.71Ni[Fe(CN)6]0.96·1.3H2O
+hypervolume per iteration: [0.428, 0.588, 0.589]
+best: example-b01-e05 Mn Na1.27Mn[Fe(CN)6]0.88·1.2H2O
 ```
 
-All 20 experiments used only the four allowed metals, and none exceeded 80 °C (maximum 80.0 °C).
+All 20 experiments used only the four allowed metals, and none exceeded 80 °C (maximum 77.1 °C).
 
 `Campaign.run()` is a coroutine. Inside an existing event loop (for example Jupyter), use
 `await campaign.run()` instead of `asyncio.run(...)`.
@@ -79,6 +79,7 @@ All 20 experiments used only the four allowed metals, and none exceeded 80 °C (
 | `max_batch_failure_rate` | 0.5 | Halt if a larger share of a batch fails or is quarantined |
 | `seed` | 0 | Random seed |
 | `target_phase` | `None` | Framework phase to optimise for; `None` keeps the campaign's recorded target, else `pba_fm3m` |
+| `objectives` | `None` | Objectives to maximise (chapter 3); `None` keeps the recorded ones, else `("target_phase_fraction", "crystallinity")` |
 
 The CLI uses its own defaults for some of these (for example `--batch-size 8`).
 
@@ -90,8 +91,11 @@ Pass `workflow_config=WorkflowConfig(...)` to `Campaign` to change the measureme
 |---|---|
 | `xrd_range`, `xrd_step_deg`, `xrd_exposure_s` | (10, 60)° 2θ, 0.02°, 120 s |
 | `wash_cycles` | 3 |
-| `dry_duration_s` | 3600 s (drying temperature and atmosphere are recipe parameters) |
-| `icp_elements` | Na, Fe, Mn, Co, Ni, Cu, Zn |
+| `dry_duration_s` | 3600 s (drying temperature, pressure and gas are recipe parameters) |
+| `icp_elements` | Na, K, Fe, Mn, Co, Ni, Cu, Zn |
+| `run_ir` | `True` (when the platform has an IR spectrometer) |
+| `echem_single_ions`, `echem_mixed_electrolytes` | filled from the campaign's objectives (chapter 3) |
+| `echem_current_mA_g`, `echem_n_cycles` | 100 mA/g, 20 |
 | `max_transport_retries`, `retry_backoff_s` | 2, 1.0 s |
 
 ## Reading results

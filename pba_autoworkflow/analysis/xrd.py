@@ -21,7 +21,11 @@ instrument, without an operator:
    secondary phases -- against the reference library by whole-pattern fitting
    (:mod:`pba_autoworkflow.analysis.phases`), giving weight fractions, refined
    lattices, and the intensity no library phase explains.
-7. Crystallinity: framework Bragg intensity against Bragg plus amorphous halo.
+7. Crystallinity: ordered framework scattering (Bragg plus diffuse) against
+   that plus the amorphous halo.  Diffuse scattering -- the framework's own
+   reflections broadened to a ~2 nm coherence length, as in a disordered,
+   rapidly dehydrated framework -- is separated from the halo and reported as
+   ``diffuse_fraction`` rather than counted as amorphous.
 
 Everything here operates on the array pair alone, so it works identically on
 simulated and real patterns.
@@ -144,6 +148,68 @@ def _fit_peak(tt: np.ndarray, y: np.ndarray, idx: int, half_width_pts: int
     amp, centre, fwhm, eta = (float(v) for v in popt)
     area = float(np.trapezoid(pseudo_voigt(x_w, amp, centre, fwhm, eta), x_w))
     return FittedPeak(centre, fwhm, amp, eta, area)
+
+
+#: coherence lengths (nm) tried for the diffuse framework component
+DIFFUSE_DOMAINS_NM = (1.5, 2.0, 3.0)
+#: diffuse shares below this (of Bragg + diffuse + halo) are reported as zero
+MIN_DIFFUSE_SHARE = 0.05
+
+
+def diffuse_template(tt: np.ndarray, lines_tt: np.ndarray, lines_I: np.ndarray,
+                     domain_nm: float, wavelength_A: float) -> np.ndarray:
+    """Unit-area profile of a framework's reflections broadened to ``domain_nm``."""
+    theta = np.radians(lines_tt / 2.0)
+    fwhm = np.degrees(0.9 * wavelength_A * 0.1 / (domain_nm * np.maximum(np.cos(theta), 1e-3)))
+    sig = fwhm / 2.3548200450309493
+    w = lines_I / lines_I.sum()
+    prof = (np.exp(-0.5 * ((tt[:, None] - lines_tt[None, :]) / sig[None, :]) ** 2)
+            / (sig[None, :] * math.sqrt(2.0 * math.pi))) @ w
+    area = float(np.trapezoid(prof, tt))
+    return prof / area if area > 0 else prof
+
+
+def diffuse_area(pattern: XRDPattern, bragg_model: np.ndarray,
+                 framework_lines: tuple[np.ndarray, np.ndarray],
+                 centre_deg: float | None = None) -> float:
+    """Area of diffuse framework scattering in ``pattern``.
+
+    The raw pattern minus the whole-pattern Bragg model leaves background,
+    amorphous halo and any diffuse scattering.  That residual is fitted with
+    the halo model of :func:`amorphous_halo_area` plus a diffuse term whose
+    shape is fixed by the framework's reflection list broadened to a 1.5-3 nm
+    coherence length (the best of three is kept).  The SNIP background is not
+    used here: it flattens exactly the broad modulation that distinguishes
+    diffuse scattering from a featureless halo.
+    """
+    tt = np.asarray(pattern.two_theta_deg, dtype=float)
+    res = np.asarray(pattern.intensity, dtype=float) - bragg_model
+    if len(framework_lines[0]) == 0:
+        return 0.0
+    t0 = float(tt[0])
+    cb = ((centre_deg - 2.0, centre_deg + 2.0) if centre_deg is not None
+          and math.isfinite(centre_deg) else (14.0, 24.0))
+    span = float(np.ptp(res)) or 1.0
+    best = None
+    for dom in DIFFUSE_DOMAINS_NM:
+        tmpl = diffuse_template(tt, framework_lines[0], framework_lines[1], dom,
+                                pattern.wavelength_A)
+
+        def model(t, c0, c1, L, A, mu, s, D, _tm=tmpl):
+            return (c0 + c1 * np.exp(-(t - t0) / L) + A * np.exp(-0.5 * ((t - mu) / s) ** 2)
+                    + D * _tm)
+
+        p0 = (float(np.min(res)), span, 8.0, 0.2 * span, float(np.mean(cb)), 5.0, 0.1 * span)
+        lo = (0.0, 0.0, 1.0, 0.0, cb[0], 3.0, 0.0)
+        hi = (np.inf, np.inf, 40.0, np.inf, cb[1], 8.0, np.inf)
+        try:
+            prm, _ = curve_fit(model, tt, res, p0=p0, bounds=(lo, hi), maxfev=20000)
+        except (RuntimeError, ValueError):
+            continue
+        rss = float(np.sum((res - model(tt, *prm)) ** 2))
+        if best is None or rss < best[0]:
+            best = (rss, float(prm[6]))
+    return best[1] if best is not None else 0.0
 
 
 def amorphous_halo_area(pattern: XRDPattern, centre_deg: float | None = None) -> float:
@@ -347,6 +413,13 @@ def _strongest_low_angle_line(r) -> float | None:
     return float(r.lines_tt[m][int(np.argmax(r.lines_I[m]))]) if m.any() else None
 
 
+def _full_grid_model(quant, pattern: XRDPattern) -> np.ndarray:
+    """The whole-pattern Bragg model on the pattern's own 2-theta grid."""
+    tt = np.asarray(pattern.two_theta_deg, dtype=float)
+    m = np.asarray(quant.model, dtype=float)
+    return m if m.shape == tt.shape else np.zeros_like(tt)
+
+
 def analyze_pattern(pattern: XRDPattern, metal: str | None = None,
                     quant: "QuantResult | None" = None) -> XRDDescriptors:
     """Full reduction of one diffractogram to structural descriptors.
@@ -362,10 +435,25 @@ def analyze_pattern(pattern: XRDPattern, metal: str | None = None,
     framework = [r for r in phases if r.framework]
     dominant = max(framework, key=lambda r: r.weight_fraction, default=None)
 
-    halo = amorphous_halo_area(pattern, centre_deg=_strongest_low_angle_line(dominant)
-                               if dominant is not None else None)
+    centre = _strongest_low_angle_line(dominant) if dominant is not None else None
+    halo = amorphous_halo_area(pattern, centre)
     fw_bragg = float(sum(r.bragg_area for r in framework))
-    crystallinity = fw_bragg / (fw_bragg + halo) if fw_bragg + halo > 0 else 0.0
+    diffuse = 0.0
+    # Only for a cubic framework: against the dense line list of a low-symmetry
+    # phase the diffuse template is degenerate with the halo and gives false
+    # positives (tested on simulated R-3c and P2_1/n patterns).
+    if (dominant is not None and dominant.phase_id == "pba_fm3m" and quant is not None
+            and quant.model is not None):
+        # The SNIP-based halo already contains any diffuse scattering, so the
+        # total stays Bragg + halo and the diffuse share moves from the
+        # amorphous to the ordered side.
+        diffuse = min(diffuse_area(pattern, _full_grid_model(quant, pattern),
+                                   (dominant.lines_tt, dominant.lines_I), centre), halo)
+    total = fw_bragg + halo
+    if total <= 0 or diffuse / total < MIN_DIFFUSE_SHARE:
+        diffuse = 0.0
+    diffuse_fraction = diffuse / total if total > 0 else 0.0
+    crystallinity = (fw_bragg + diffuse) / total if total > 0 else 0.0
     fractions = {}
     for r in phases:
         fractions[r.phase_id] = fractions.get(r.phase_id, 0.0) + round(r.weight_fraction, 5)
@@ -374,6 +462,7 @@ def analyze_pattern(pattern: XRDPattern, metal: str | None = None,
         phase_lattice={r.phase_id: [round(v, 5) for v in r.lattice] for r in phases},
         unidentified_fraction=float(np.clip(quant.unidentified_fraction, 0, 1)) if quant else 0.0,
         n_unidentified_peaks=len(quant.unidentified_peaks) if quant else len(peaks),
+        diffuse_fraction=float(np.clip(diffuse_fraction, 0.0, 1.0)),
     )
     if dominant is None or dominant.n_matched < 2:
         peak_area = float(sum(p.area for p in peaks))

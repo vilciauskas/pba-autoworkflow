@@ -60,11 +60,14 @@ of being silently corrected.
 
 ### 2.2 Design points worth stating in the report
 
-- **Recipe parameters** (planner-controlled): metal, `c_metal_M`, `c_hcf_M`, `c_nacl_M`,
-  `c_citrate_M`, `ph`, `temperature_C`, `addition_rate_mL_min`, `aging_time_h`,
-  `stir_rate_rpm`.
-- **Objectives:** weight fraction of a chosen target phase and crystallinity, both from
-  whole-pattern XRD phase quantification (two-objective Pareto front). Zn and drying
+- **Recipe parameters** (planner-controlled): metal, `hcf_precursor`, `c_metal_M`, `c_hcf_M`,
+  `c_nacl_M`, `c_citrate_M`, `ph`, `temperature_C`, `addition_rate_mL_min`, `aging_time_h`,
+  `stir_rate_rpm`, `dry_temperature_C`, `dry_pressure_mbar`, `dry_gas`.
+- **Objectives:** chosen per campaign. Default: weight fraction of a chosen target phase and
+  crystallinity, from whole-pattern XRD phase quantification. Optional electrochemical
+  objectives (Na⁺/K⁺/Zn²⁺ separation factors, Zn²⁺ retention and capacity, framework
+  stability) after the group's zinc hexacyanoferrate study, which also motivated drying pressure
+  and gas, the K₃[Fe(CN)₆] precursor, K in the composition, and IR Fe(II). Zn and drying
   temperature/atmosphere were added for polymorph control. Before that the objectives were
   XRD phase purity and crystallinity, and before that the objectives were sodium inventory and framework integrity from ICP, and a
   UV-Vis supernatant measurement was part of the workflow; both were removed to focus on phase

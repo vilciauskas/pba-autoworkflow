@@ -24,7 +24,7 @@ import math
 
 import numpy as np
 
-from ..schema import ICPResult, SynthesisParameters, XRDPattern
+from ..schema import ICPResult, IRSpectrum, SynthesisParameters, XRDPattern
 from .ground_truth import LatentState
 
 _INSTRUMENT_FWHM_DEG = 0.085  # Caglioti-like constant term of the diffractometer
@@ -32,6 +32,8 @@ _SQRT_2PI = math.sqrt(2.0 * math.pi)
 _IMPURITY_DOMAIN_NM = 45.0
 _REFERENCE_DOMAIN_NM = 40.0
 _HALO_SIGMA_DEG = 5.5
+#: coherence length of the short-range-ordered (diffuse) framework component
+_DIFFUSE_DOMAIN_NM = 2.0
 #: Per-reflection log-normal intensity scatter (texture, counting statistics of
 #: the powder): keeps the forward model from being an exact copy of the
 #: analysis templates.
@@ -98,13 +100,13 @@ def simulate_xrd(
                    default=f"pba_fm3m/{latent.metal}")
     hump_centre = 25.0
 
-    def add_phase(ref, mass: float, domain_nm: float) -> float:
+    def add_phase(ref, mass: float, domain_nm: float, texture: bool = True) -> float:
         scale = _phase_scale(latent, ref)
         ltt, lI = ref.lines(scale, wavelength_A, ext)
         if ltt.size == 0:
             return 0.0
         c = K * mass / (ref.cell_mass_amu * ref.volume(scale))
-        area = c * lI * np.exp(rng.normal(0.0, _TEXTURE_SIGMA, size=lI.size))
+        area = c * lI * (np.exp(rng.normal(0.0, _TEXTURE_SIGMA, size=lI.size)) if texture else 1.0)
         sigma = np.hypot(_scherrer_fwhm_deg(domain_nm, ltt, wavelength_A), _INSTRUMENT_FWHM_DEG) / 2.3548
         nonlocal signal
         signal = signal + (np.exp(-0.5 * ((tt[:, None] - ltt[None, :]) / sigma[None, :]) ** 2)
@@ -114,7 +116,13 @@ def simulate_xrd(
     for key, share in latent.polymorph_shares.items():
         ref = lib[key]
         mass = framework_mass * share
-        full = add_phase(ref, mass * latent.crystallinity, latent.domain_size_nm)
+        dshare = latent.diffuse_share.get(key, 0.0)
+        ordered = mass * latent.crystallinity
+        full = add_phase(ref, ordered * (1.0 - dshare), latent.domain_size_nm)
+        if dshare > 0:
+            # Short-range-ordered framework: the same reflections, broadened to
+            # a ~2 nm coherence length (diffuse scattering around Bragg positions).
+            full += add_phase(ref, ordered * dshare, _DIFFUSE_DOMAIN_NM, texture=False)
         if latent.crystallinity > 0:
             halo_area += full / latent.crystallinity * (1.0 - latent.crystallinity)
         if key == dominant:
@@ -142,6 +150,7 @@ def simulate_icp(
     rng: np.random.Generator,
     digest_volume_mL: float = 25.0,
     target_digest_mass_mg: float = 5.0,
+    elements=None,
 ) -> ICPResult:
     """Elemental assay of an aliquot of the washed, dried powder.
 
@@ -153,20 +162,25 @@ def simulate_icp(
 
     mass_mg = min(target_digest_mass_mg, max(latent.solid_mass_mg * 0.6, 0.2))
     fw = formula_weight(params.metal, latent.na_per_fu, latent.vacancy_fraction,
-                        latent.water_per_fu)
+                        latent.water_per_fu, latent.k_per_fu)
     n_fu_mol = (mass_mg * 1e-3) / fw
 
     surface_na = 1.0 + max(0.0, rng.normal(0.035, 0.02))  # unwashed NaCl
+    surface_k = 1.0 + max(0.0, rng.normal(0.035, 0.02))   # unwashed K salt
     moles = {
         "Na": n_fu_mol * latent.na_per_fu * surface_na,
+        "K": n_fu_mol * latent.k_per_fu * surface_k,
         params.metal: n_fu_mol,
         "Fe": n_fu_mol * (1.0 - latent.vacancy_fraction),
     }
     if params.metal == "Fe":  # N-site and C-site iron are indistinguishable
         moles = {
             "Na": moles["Na"],
+            "K": moles["K"],
             "Fe": n_fu_mol * (2.0 - latent.vacancy_fraction),
         }
+    if elements is not None:
+        moles = {el: m for el, m in moles.items() if el in elements}
 
     conc = {}
     for el, mol in moles.items():
@@ -177,7 +191,8 @@ def simulate_icp(
     # so carbon measures the C-site sublattice independently of the metals -- the
     # only way to resolve vacancies in the Fe analogue, where ICP sees one iron
     # pool.  1 % relative, typical for a well-run combustion analyzer.
-    c_moles = n_fu_mol * 6.0 * (1.0 - latent.vacancy_fraction)
+    # Reductive decyanation during drying removes one CN per reduced Fe.
+    c_moles = n_fu_mol * (6.0 * (1.0 - latent.vacancy_fraction) - latent.cn_loss_per_fu)
     carbon_wt_pct = 100.0 * c_moles * ATOMIC_WEIGHT["C"] / (mass_mg * 1e-3)
     carbon_wt_pct *= 1.0 + rng.normal(0.0, 0.01)
 
@@ -205,7 +220,37 @@ def simulate_gravimetric_yield(
         params.c_metal_M * params.volume_A_mL, params.c_hcf_M * params.volume_B_mL
     ) * 1e-3
     fw = formula_weight(params.metal, latent.na_per_fu, latent.vacancy_fraction,
-                        latent.water_per_fu)
+                        latent.water_per_fu, latent.k_per_fu)
     theo_mg = limiting_mol * fw * 1e3
     weighed = latent.solid_mass_mg + rng.normal(0.0, 0.1)
     return float(max(0.0, weighed)), float(theo_mg)
+
+
+#: Cyanide-stretch band positions (cm-1) of Fe(II)-CN-M and Fe(III)-CN-M.
+_NU_FE2 = {"Mn": 2072.0, "Fe": 2085.0, "Co": 2090.0, "Ni": 2096.0, "Cu": 2098.0, "Zn": 2097.0}
+_NU_FE3 = {"Mn": 2150.0, "Fe": 2160.0, "Co": 2165.0, "Ni": 2168.0, "Cu": 2170.0, "Zn": 2172.0}
+
+
+def simulate_ir(latent: LatentState, rng: np.random.Generator, absorptivity_ratio: float = 0.25,
+                wn_range: tuple[float, float] = (1950.0, 2300.0), step_cm1: float = 1.0
+                ) -> IRSpectrum:
+    """ATR-IR absorbance of the cyanide stretch.
+
+    Two Gaussian bands, Fe(II)-CN-M and Fe(III)-CN-M, with integrated areas
+    proportional to the bulk Fe(II)/Fe(III) amounts times their absorptivities
+    (``absorptivity_ratio`` = eps(Fe(III)) / eps(Fe(II)); the Fe(III) band is the
+    weaker one).  Bands broaden with vacancies; baseline drift and noise added.
+    """
+    wn = np.arange(wn_range[0], wn_range[1] + step_cm1, step_cm1)
+    m = latent.metal or "Mn"
+    f2 = float(np.clip(latent.fe2_fraction, 0.0, 1.0))
+    w2 = 16.0 + 30.0 * latent.vacancy_fraction
+    w3 = 20.0 + 30.0 * latent.vacancy_fraction
+    nu2 = _NU_FE2.get(m, 2085.0) + rng.normal(0.0, 1.5)
+    nu3 = _NU_FE3.get(m, 2165.0) + rng.normal(0.0, 1.5)
+    amp = 0.6 * (1.0 - latent.vacancy_fraction)
+    g = lambda nu, w: np.exp(-0.5 * ((wn - nu) / w) ** 2) / (w * _SQRT_2PI)  # noqa: E731
+    a = amp * 40.0 * (f2 * g(nu2, w2) + (1.0 - f2) * absorptivity_ratio * g(nu3, w3))
+    base = 0.02 + 0.00004 * (wn - wn[0]) + rng.normal(0.0, 0.004)
+    a = a + base + rng.normal(0.0, 0.0025, size=wn.size)
+    return IRSpectrum(wavenumber_cm1=wn, absorbance=a)

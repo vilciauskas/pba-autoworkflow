@@ -36,7 +36,14 @@ from typing import Callable, Sequence
 
 import numpy as np
 
-from .analysis.objectives import DEFAULT_TARGET_PHASE, OBJECTIVE_NAMES, scalarize
+from .analysis.objectives import (
+    DEFAULT_TARGET_PHASE,
+    OBJECTIVE_CATALOGUE,
+    OBJECTIVE_NAMES,
+    echem_plan,
+    scalarize,
+    validate_objectives,
+)
 from .devices.base import Platform
 from .optimize.planner import Planner, hypervolume, make_planner, pareto_mask
 from .clock import tick
@@ -56,7 +63,11 @@ class CampaignConfig:
     """Everything that defines a campaign's behaviour, and nothing else."""
 
     campaign_id: str = field(default_factory=lambda: f"pba-{uuid.uuid4().hex[:8]}")
-    objective: str = "na_and_framework"
+    #: objectives to maximise (``analysis.objectives.OBJECTIVE_CATALOGUE``).
+    #: None: those recorded for an existing campaign, else the XRD pair
+    #: (target_phase_fraction, crystallinity).  Electrochemical objectives add
+    #: the cycling and competitive-insertion stage to every run.
+    objectives: tuple[str, ...] | None = None
     planner: str = "bayes"
     seed_planner: str = "sobol"
     n_seed: int = 12
@@ -122,6 +133,7 @@ class Campaign:
         self.space = space or default_design_space()
         self.workflow_config = workflow_config or WorkflowConfig()
         self._resolve_target_phase(store)
+        self._resolve_objectives(store)
         self._progress = progress or (lambda msg: None)
 
         self.pool = StationPool(default_capacities(self.config.reactor_capacity))
@@ -132,8 +144,10 @@ class Campaign:
         self.workflow = ExperimentWorkflow(platform, store, self.workflow_config,
                                            station_pool=self.pool)
 
+        extra = ({"objective_names": self.objective_names}
+                 if self.config.planner in ("bayes", "qnehvi") else {})
         self.planner = planner or make_planner(
-            self.config.planner, self.space, seed=self.config.seed
+            self.config.planner, self.space, seed=self.config.seed, **extra
         )
         self.seed_planner = make_planner(
             self.config.seed_planner, self.space, seed=self.config.seed + 17
@@ -148,11 +162,11 @@ class Campaign:
             )
         self.history: list[Experiment] = store.load_campaign(self.config.campaign_id)
         stale = sorted({k for e in self.history if e.objectives is not None
-                        for k in e.objectives.values} - set(OBJECTIVE_NAMES))
+                        for k in e.objectives.values} - set(self.objective_names))
         if stale:
             raise ValueError(
                 f"campaign {self.config.campaign_id!r} was recorded with objectives "
-                f"{stale}, but this version optimises {list(OBJECTIVE_NAMES)}; "
+                f"{stale}, but this campaign optimises {list(self.objective_names)}; "
                 "its results cannot be combined -- start a new campaign id")
         # Iteration records are logged as ``iteration_complete`` events; reload
         # them so a resumed campaign (or a report built from the store) keeps its
@@ -186,6 +200,29 @@ class Campaign:
         self.config.target_phase = target
         self.workflow_config.target_phase = target
 
+    def _resolve_objectives(self, store: ProvenanceStore) -> None:
+        stored = store.campaign_config(self.config.campaign_id) or {}
+        recorded = tuple(stored["objectives"]) if stored.get("objectives") else None
+        asked = tuple(self.config.objectives) if self.config.objectives else None
+        if recorded and asked and asked != recorded:
+            raise ValueError(
+                f"campaign {self.config.campaign_id!r} optimises {list(recorded)}, not "
+                f"{list(asked)}; pass the same objectives (or none) or start a new campaign id")
+        names = validate_objectives(asked or recorded or OBJECTIVE_NAMES)
+        self.config.objectives = names
+        self.objective_names = names
+        self.workflow_config.objectives = names
+        single, mixed = echem_plan(names)
+        if single or mixed:
+            if self.platform.electrochem is None:
+                needs = [n for n in names if OBJECTIVE_CATALOGUE[n] == "echem"]
+                raise ValueError(f"objectives {needs} need a potentiostat; the platform has none")
+            # Keep any electrolytes the caller configured, add what the objectives need.
+            wc = self.workflow_config
+            wc.echem_single_ions = tuple(dict.fromkeys(tuple(wc.echem_single_ions) + single))
+            wc.echem_mixed_electrolytes = tuple(wc.echem_mixed_electrolytes) + tuple(
+                m for m in mixed if m not in tuple(wc.echem_mixed_electrolytes))
+
     # ------------------------------------------------------------------ #
     # Views over the history
     # ------------------------------------------------------------------ #
@@ -197,23 +234,23 @@ class Campaign:
 
     def objective_matrix(self, feasible_only: bool = True) -> np.ndarray:
         rows = [
-            [e.objectives.values[n] for n in OBJECTIVE_NAMES]
+            [e.objectives.values[n] for n in self.objective_names]
             for e in self.usable
             if (e.objectives.feasible or not feasible_only)
         ]
-        return np.array(rows) if rows else np.empty((0, len(OBJECTIVE_NAMES)))
+        return np.array(rows) if rows else np.empty((0, len(self.objective_names)))
 
     def current_hypervolume(self) -> float:
         Y = self.objective_matrix()
         if Y.size == 0:
             return 0.0
-        return hypervolume(Y, np.zeros(len(OBJECTIVE_NAMES)))
+        return hypervolume(Y, np.zeros(len(self.objective_names)))
 
     def pareto_front(self) -> list[Experiment]:
         feasible = [e for e in self.usable if e.objectives.feasible]
         if not feasible:
             return []
-        Y = np.array([[e.objectives.values[n] for n in OBJECTIVE_NAMES]
+        Y = np.array([[e.objectives.values[n] for n in self.objective_names]
                       for e in feasible])
         return [e for e, keep in zip(feasible, pareto_mask(Y)) if keep]
 
@@ -442,7 +479,7 @@ class Campaign:
         if not reps:
             return {}
         out: dict[str, float] = {}
-        for name in OBJECTIVE_NAMES:
+        for name in self.objective_names:
             rsds = []
             for g in reps:
                 vals = np.array([e.objectives.values[name] for e in g])

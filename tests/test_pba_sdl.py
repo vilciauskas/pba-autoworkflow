@@ -31,7 +31,8 @@ from pba_autoworkflow.analysis.objectives import (
     quality_flags,
     scalarize,
 )
-from pba_autoworkflow.analysis.spectra import analyze_icp
+from pba_autoworkflow.analysis.objectives import echem_plan
+from pba_autoworkflow.analysis.spectra import analyze_icp, analyze_ir, charge_balance_residual
 from pba_autoworkflow.analysis.xrd import analyze_pattern, index_cubic, find_and_fit_peaks
 from pba_autoworkflow.campaign import Campaign
 from pba_autoworkflow.devices.base import HardwareFault, VesselHandle
@@ -55,7 +56,13 @@ from pba_autoworkflow.schema import (
 )
 from pba_autoworkflow.scheduler import StationPool
 from pba_autoworkflow.sim.ground_truth import GroundTruth
-from pba_autoworkflow.sim.instruments import simulate_icp, simulate_xrd
+from pba_autoworkflow.sim.instruments import simulate_icp, simulate_ir, simulate_xrd
+import tempfile
+from pba_autoworkflow.campaign import CampaignConfig
+from pba_autoworkflow.devices.simulated import build_simulated_platform
+from pba_autoworkflow.provenance import ProvenanceStore
+from pba_autoworkflow.schema import Experiment, ExperimentStatus, charge_balanced_a
+from pba_autoworkflow.workflow import ExperimentWorkflow, WorkflowConfig
 
 
 def recipe(**over) -> SynthesisParameters:
@@ -349,7 +356,8 @@ def test_sobol_seed_covers_all_metals():
     space = default_design_space()
     sugg = SobolPlanner(space, seed=0).suggest(16, [])
     assert {s.parameters.metal for s in sugg} == set(METALS)
-    assert {s.parameters.dry_atmosphere for s in sugg} == {"air", "vacuum"}
+    assert {s.parameters.dry_gas for s in sugg} == {"ambient", "dry"}
+    assert {s.parameters.hcf_precursor for s in sugg} == {"Na4FeCN6", "K3FeCN6"}
 
 
 def test_bayes_planner_falls_back_when_undertrained():
@@ -1023,7 +1031,7 @@ def test_phase_library_is_consistent():
     assert tt[int(np.argmax(inten))] == pytest.approx(31.70, abs=0.02)
 
 
-@pytest.mark.parametrize("over", [dict(), dict(dry_temperature_C=110.0, dry_atmosphere="vacuum"),
+@pytest.mark.parametrize("over", [dict(), dict(dry_temperature_C=110.0, dry_pressure_mbar=8.0),
                                   dict(temperature_C=60.0, addition_rate_mL_min=0.5, aging_time_h=6.0)])
 def test_zn_polymorph_fractions_recovered(over):
     """Weight fractions of the two Zn polymorphs, for a well-ordered framework.
@@ -1041,11 +1049,170 @@ def test_zn_polymorph_fractions_recovered(over):
             (phase, truth, desc.phase_fractions)
 
 
-def test_hot_or_vacuum_drying_converts_cubic_zn_to_r3c():
-    gt = GroundTruth(seed=1, reproducibility=0.0, failure_rate=0.0)
-    share = lambda **o: gt.latent(_zn(**o), np.random.default_rng(3)).polymorph_shares.get("znhcf_r3c/Zn", 0.0)
-    cold, hot, vac = share(), share(dry_temperature_C=100.0), share(dry_temperature_C=55.0, dry_atmosphere="vacuum")
-    assert cold < 0.5 < hot and vac > share(dry_temperature_C=55.0)
+#: The five drying routes of Pilipavicius et al. (zinc hexacyanoferrate from
+#: K3[Fe(CN)6]): (T degC, P mbar, gas, measured phase)
+PAPER_ROUTES = [(20.0, 1013.0, "dry", "R-3c"), (20.0, 8.0, "ambient", "R-3c"),
+                (120.0, 1013.0, "ambient", "R-3c"), (20.0, 0.02, "ambient", "cubic"),
+                (120.0, 8.0, "ambient", "cubic")]
+
+
+def _paper(**over):
+    base = dict(metal="Zn", hcf_precursor="K3FeCN6", c_metal_M=0.1, c_hcf_M=0.05, c_nacl_M=0.0,
+                c_citrate_M=0.0, ph=5.5, temperature_C=25.0, addition_rate_mL_min=1.0,
+                aging_time_h=1.0, stir_rate_rpm=600.0)
+    base.update(over)
+    return SynthesisParameters(**base)
+
+
+@pytest.mark.parametrize("T,P,gas,phase", PAPER_ROUTES)
+def test_simulator_reproduces_paper_drying_matrix(T, P, gas, phase):
+    """Slow drying gives R-3c, fast drying (high Pi) disordered cubic."""
+    shares = []
+    for sd in range(4):
+        lat = GroundTruth(seed=sd, failure_rate=0.0).latent(
+            _paper(dry_temperature_C=T, dry_pressure_mbar=P, dry_gas=gas), np.random.default_rng(sd))
+        shares.append(lat.polymorph_shares.get("znhcf_r3c/Zn", 0.0))
+        if phase == "cubic":
+            assert lat.disordered_cubic_share > 0.9
+    assert (np.median(shares) > 0.7) if phase == "R-3c" else (np.median(shares) < 0.2), shares
+
+
+def test_undried_hydrate_stays_cubic_and_heat_reduces_fe():
+    gt = GroundTruth(seed=0, failure_rate=0.0)
+    lat = lambda **o: gt.latent(_paper(**o), np.random.default_rng(1))  # noqa: E731
+    wet = lat(dry_temperature_C=20.0, dry_pressure_mbar=1013.0, dry_gas="ambient")
+    assert wet.dehydration < 0.2 and wet.polymorph_shares.get("pba_fm3m/Zn", 0) > 0.7
+    rt = lat(dry_temperature_C=20.0, dry_pressure_mbar=8.0)
+    air = lat(dry_temperature_C=120.0, dry_pressure_mbar=1013.0)
+    vac = lat(dry_temperature_C=120.0, dry_pressure_mbar=8.0)
+    assert rt.fe2_fraction < air.fe2_fraction < vac.fe2_fraction
+    # XPS increments: +6 points (air) and +17 points (8 mbar) over room temperature
+    assert air.fe2_fraction - rt.fe2_fraction == pytest.approx(0.06, abs=0.03)
+    assert vac.fe2_fraction - rt.fe2_fraction == pytest.approx(0.17, abs=0.04)
+
+
+def test_deck_applies_the_commanded_drying():
+    """Regression: drying used to be fixed at 70 degC in air on the simulated
+    deck whatever the recipe said, so drying parameters were optimised blind."""
+    out = {}
+    for name, dry in (("slow", dict(dry_temperature_C=20.0, dry_pressure_mbar=1013.0, dry_gas="dry")),
+                      ("fast", dict(dry_temperature_C=20.0, dry_pressure_mbar=0.02))):
+        platform, backend = build_simulated_platform(seed=0, time_scale=0.0, failure_rate=0.0,
+                                                     mechanical_fault_rate=0.0,
+                                                     transport_fault_rate=0.0)
+        store = ProvenanceStore(tempfile.mkdtemp())
+        exp = Experiment(experiment_id="d-b00-e00", campaign_id="d", batch_index=0,
+                         parameters=_paper(**dry))
+        asyncio.run(ExperimentWorkflow(platform, store).run(exp))
+        lat = backend.record("d-b00-e00-A").latent
+        out[name] = lat.polymorph_shares.get("znhcf_r3c/Zn", 0.0)
+        assert lat.dried
+    assert out["slow"] > 0.7 > 0.2 > out["fast"], out
+
+
+def test_old_dry_atmosphere_records_still_load():
+    p = SynthesisParameters.model_validate(dict(
+        metal="Zn", c_metal_M=0.05, c_hcf_M=0.05, c_nacl_M=0.0, c_citrate_M=0.0, ph=4.0,
+        temperature_C=25.0, addition_rate_mL_min=1.0, aging_time_h=1.0, stir_rate_rpm=600.0,
+        dry_atmosphere="vacuum"))
+    assert p.dry_pressure_mbar == 1.0 and p.dry_gas == "ambient" and p.hcf_precursor == "Na4FeCN6"
+
+
+def test_drying_index_matches_paper_values():
+    for (T, P, gas, _), pi in zip(PAPER_ROUTES, (0.023, 1.92, 1.94, 1168.0, 246.0)):
+        assert _paper(dry_temperature_C=T, dry_pressure_mbar=P, dry_gas=gas).drying_index \
+            == pytest.approx(pi, rel=0.02)
+
+
+def test_potassium_route_composition_and_charge_balance():
+    """K3[Fe(CN)6] route: K on the A sites, Fe(III)/Fe(II) mixed, charge balanced."""
+    gt = GroundTruth(seed=0, failure_rate=0.0, reproducibility=0.0)
+    p = _paper(dry_temperature_C=20.0, dry_pressure_mbar=8.0)
+    lat = gt.latent(p, np.random.default_rng(2))
+    assert lat.na_per_fu < 0.01 < lat.k_per_fu
+    assert lat.k_per_fu == pytest.approx(charge_balanced_a(lat.vacancy_fraction, lat.fe2_fraction),
+                                         abs=0.06)
+    comp = analyze_icp(simulate_icp(lat, p, np.random.default_rng(3)), p)
+    assert comp.k_per_fu == pytest.approx(lat.k_per_fu, abs=0.05) and comp.na_per_fu < 0.02
+    ir = analyze_ir(simulate_ir(lat, np.random.default_rng(4), gt.ir_absorptivity_ratio))
+    assert ir.fe2_fraction == pytest.approx(lat.fe2_fraction, abs=0.1)
+    assert abs(charge_balance_residual(comp, ir.fe2_fraction)) < 0.25
+
+
+def test_ir_ranks_fe2_fraction():
+    gt = GroundTruth(seed=0, failure_rate=0.0)
+    fe2, meas = [], []
+    for k, (T, P) in enumerate(((20.0, 8.0), (120.0, 1013.0), (120.0, 8.0), (120.0, 0.05))):
+        lat = gt.latent(_paper(dry_temperature_C=T, dry_pressure_mbar=P), np.random.default_rng(k))
+        fe2.append(lat.fe2_fraction)
+        meas.append(analyze_ir(simulate_ir(lat, np.random.default_rng(10 + k))).fe2_fraction)
+    assert list(np.argsort(fe2)) == list(np.argsort(meas)), (fe2, meas)
+
+
+def test_diffuse_scattering_not_reported_for_ordered_frameworks():
+    gt = GroundTruth(seed=0, failure_rate=0.0)
+    rng = np.random.default_rng(9)
+    for metal in ("Mn", "Co", "Ni", "Cu"):
+        lat = gt.latent(recipe(metal=metal), rng)
+        assert analyze_pattern(simulate_xrd(lat, rng), metal).diffuse_fraction == 0.0
+
+
+def test_predicted_separation_factor_matches_competitive_insertion_model():
+    """The analysis formula and the simulator's insertion law are the same physics."""
+    from pba_autoworkflow.analysis.echem import predicted_separation_factor
+    from pba_autoworkflow.sim.electrochem import CHARGE, formal_potential, ion_shares
+    el = {"Zn": 1.0, "K": 0.005}
+    sh = ion_shares("r3c", "Zn", el, {})
+    x = {i: sh[i] / CHARGE[i] for i in sh}
+    alpha_sim = (x["K"] / x["Zn"]) / (el["K"] / el["Zn"])
+    e = {i: formal_potential("r3c", i, "Zn", {}) for i in el}
+    assert predicted_separation_factor(e["K"], e["Zn"], "K", "Zn", el) == pytest.approx(alpha_sim, rel=1e-9)
+
+
+def test_electrochemistry_distinguishes_r3c_from_disordered_cubic():
+    """Plateau (two-phase) vs sloping (solid solution), K/Zn selectivity and Zn
+    retention all differ between the two drying-selected phases."""
+    objs = ("target_phase_fraction", "k_zn_selectivity", "zn_retention")
+    single, mixed = echem_plan(objs)
+    res = {}
+    for name, dry in (("R", dict(dry_temperature_C=20.0, dry_pressure_mbar=1013.0, dry_gas="dry")),
+                      ("DC", dict(dry_temperature_C=20.0, dry_pressure_mbar=0.02))):
+        platform, _ = build_simulated_platform(seed=1, time_scale=0.0, failure_rate=0.0,
+                                               mechanical_fault_rate=0.0, transport_fault_rate=0.0)
+        exp = Experiment(experiment_id="e-b00-e00", campaign_id="e", batch_index=0,
+                         parameters=_paper(**dry))
+        wf = ExperimentWorkflow(platform, ProvenanceStore(tempfile.mkdtemp()), WorkflowConfig(
+            target_phase="znhcf_r3c", objectives=objs, echem_single_ions=single,
+            echem_mixed_electrolytes=mixed))
+        asyncio.run(wf.run(exp))
+        assert exp.status is ExperimentStatus.COMPLETE, exp.error
+        res[name] = exp.descriptors.echem
+    R, DC = res["R"], res["DC"]
+    assert R.plateau_fraction["Zn"] > 0.3 > 0.1 > DC.plateau_fraction["Zn"]
+    assert R.separation_factor["K/Zn"] > 2 * DC.separation_factor["K/Zn"] > 1.0
+    assert DC.retention["Zn"] > R.retention["Zn"]
+    for d in (R, DC):   # measured vs predicted within a factor of 4
+        assert 0.25 < d.separation_factor["K/Zn"] / d.predicted_separation_factor["K/Zn"] < 4.0
+
+
+def test_objective_choice_is_validated_and_recorded(tmp_path):
+    store = ProvenanceStore(str(tmp_path))
+    with pytest.raises(ValueError, match="unknown objective"):
+        Campaign(build_simulated_platform(seed=0, time_scale=0.0)[0], store,
+                 CampaignConfig(campaign_id="o1", objectives=("capacity",)))
+    with pytest.raises(ValueError, match="potentiostat"):
+        Campaign(build_simulated_platform(seed=0, time_scale=0.0, with_electrochem=False)[0], store,
+                 CampaignConfig(campaign_id="o2", objectives=("crystallinity", "zn_retention")))
+    c = Campaign(build_simulated_platform(seed=0, time_scale=0.0)[0], store,
+                 CampaignConfig(campaign_id="o3", objectives=("crystallinity", "k_zn_selectivity")))
+    assert c.workflow_config.echem_single_ions == ("Zn", "K")
+    assert c.planner.objective_names == ("crystallinity", "k_zn_selectivity")
+    again = Campaign(build_simulated_platform(seed=0, time_scale=0.0)[0], store,
+                     CampaignConfig(campaign_id="o3"))
+    assert again.objective_names == ("crystallinity", "k_zn_selectivity")
+    with pytest.raises(ValueError, match="optimises"):
+        Campaign(build_simulated_platform(seed=0, time_scale=0.0)[0], store,
+                 CampaignConfig(campaign_id="o3", objectives=("crystallinity",)))
 
 
 def test_no_false_monoclinic_in_cubic_mn_fe():
@@ -1111,3 +1278,14 @@ def test_zn_low_order_bias_is_bounded():
             .phase_fractions.get("znhcf_r3c", 0.0) - truth for k in range(4)]))
     assert abs(bias[0.7]) < 0.08, bias
     assert bias[0.35] < 0.30, bias
+
+
+def test_sodium_route_zinc_framework_keeps_its_sodium():
+    """Regression: the Zn branch reused the generic branch's reduced Fe(II) share,
+    so Na4[Fe(CN)6]-route zinc frameworks came out with no Na and Fe(III)."""
+    gt = GroundTruth(seed=0, reproducibility=0.0, failure_rate=0.0)
+    p = recipe(metal="Zn", c_metal_M=0.0655, c_hcf_M=0.1036, c_nacl_M=1.14, ph=6.0,
+               temperature_C=55.0, addition_rate_mL_min=0.11, aging_time_h=5.7)
+    s = gt.precipitate(p, np.random.default_rng(1))
+    assert s.fe2_fraction > 0.95
+    assert s.na_per_fu == pytest.approx(charge_balanced_a(s.vacancy_fraction, 1.0), abs=0.05)

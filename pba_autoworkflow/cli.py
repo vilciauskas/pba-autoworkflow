@@ -44,6 +44,10 @@ def _add_campaign_args(ap: argparse.ArgumentParser) -> None:
                     choices=["pba_fm3m", "pba_p21n", "znhcf_r3c"],
                     help="framework phase to optimise for (default: the campaign's "
                          "recorded target, else pba_fm3m)")
+    ap.add_argument("--objectives", default=None,
+                    help="comma-separated objectives (default: the campaign's recorded "
+                         "ones, else target_phase_fraction,crystallinity); e.g. "
+                         "target_phase_fraction,k_zn_selectivity,zn_retention")
     ap.add_argument("--time-scale", type=float, default=0.0,
                     help="wall-clock compression for the simulated deck "
                          "(1.0 = real durations, 0.0 = instant)")
@@ -74,6 +78,8 @@ def _build(args, campaign_id: str | None) -> tuple[Campaign, ProvenanceStore]:
         reactor_capacity=args.reactor_capacity,
         seed=args.seed,
         target_phase=getattr(args, "target_phase", None),
+        objectives=(tuple(o.strip() for o in args.objectives.split(",") if o.strip())
+                    if getattr(args, "objectives", None) else None),
     )
     platform, _ = build_simulated_platform(
         seed=args.seed, time_scale=args.time_scale,

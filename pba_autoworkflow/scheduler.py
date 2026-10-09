@@ -198,6 +198,8 @@ def default_capacities(reactor_capacity: int = 4) -> dict[str, int]:
         "workup": 2,
         "diffractometer": 1,
         "elemental": 1,
+        "ir": 1,
+        "electrochem": 4,
     }
 
 

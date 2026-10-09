@@ -99,9 +99,12 @@ def plot_campaign(campaign: Campaign, path: str | Path):
     ax_hv.set_ylabel("dominated hypervolume")
     ax_hv.set_title("Closed-loop progress", loc="left", fontsize=11)
 
+    names = tuple(getattr(campaign, "objective_names", OBJECTIVE_NAMES))
+    if len(names) == 1:
+        names = names * 2
     # -- 2. objective space ------------------------------------------------- #
     if usable:
-        Y = np.array([[e.objectives.values[n] for n in OBJECTIVE_NAMES]
+        Y = np.array([[e.objectives.values[n] for n in names[:2]]
                       for e in usable])
         feas = np.array([e.objectives.feasible for e in usable])
         batch = np.array([e.batch_index for e in usable])
@@ -119,9 +122,10 @@ def plot_campaign(campaign: Campaign, path: str | Path):
                         lw=1.4, marker="D", ms=5, label="Pareto front", zorder=5)
             fig.colorbar(sc, ax=ax_obj, label="batch", pad=0.02)
         ax_obj.legend(fontsize=8, frameon=False, loc="lower left")
-    ax_obj.set_xlabel(f"{OBJECTIVE_NAMES[0].replace('_', ' ')} →")
-    ax_obj.set_ylabel(f"{OBJECTIVE_NAMES[1].replace('_', ' ')} →")
-    ax_obj.set_title("Objective space", loc="left", fontsize=11)
+    ax_obj.set_xlabel(f"{names[0].replace('_', ' ')} →")
+    ax_obj.set_ylabel(f"{names[1].replace('_', ' ')} →" if len(names) > 1 else "")
+    ax_obj.set_title("Objective space" + (f" (first 2 of {len(names)})" if len(names) > 2 else ""),
+                     loc="left", fontsize=11)
 
     # -- 3. platform outcomes ----------------------------------------------- #
     batches = sorted({e.batch_index for e in campaign.history})
@@ -235,7 +239,8 @@ def plot_best_pattern(campaign: Campaign, path: str | Path):
 
     comp = best.descriptors.composition
     d = best.descriptors.xrd
-    target = (best.metadata or {}).get("target_phase", "")
+    # metadata is not reloaded from the store; the campaign config is
+    target = (best.metadata or {}).get("target_phase") or campaign.config.target_phase or ""
     tf = best.objectives.values.get("target_phase_fraction") if best.objectives else None
     subtitle = (f"{comp.formula if comp else '?'} — {d.phase}, crystallinity "
                 f"{d.crystallinity_index:.2f}"

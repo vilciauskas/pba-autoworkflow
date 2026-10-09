@@ -19,8 +19,11 @@ M = Mn, Fe, Co, Ni, Cu, Zn). It plans experiments, drives instruments, reduces r
 traces to descriptors, records everything, and closes the loop with a constrained
 multi-objective optimizer. The current focus is phase formation and polymorph
 control, judged from powder XRD: each campaign targets one framework phase (for
-example cubic or rhombohedral R-3c zinc hexacyanoferrate), and drying temperature
-and atmosphere are part of the recipe.
+example cubic or rhombohedral R-3c zinc hexacyanoferrate). Drying temperature,
+pressure and gas and the hexacyanoferrate precursor (Na₄[Fe(CN)₆] or K₃[Fe(CN)₆])
+are part of the recipe. Optional stations add ATR-IR (Fe(II) share) and
+electrochemistry, so a campaign can also optimise Na⁺/K⁺/Zn²⁺ insertion selectivity,
+Zn²⁺ retention and framework stability.
 
 *This project has received funding under the grant agreement with the Research Council of Lithuania (LMTLT) (Project No. S-ITP-24-7).*
 
@@ -193,17 +196,20 @@ characteristic silent failure of an automated platform.
 |---|---|
 | `SynthesisParameters` | one validated recipe |
 | `DesignSpace` | physical ↔ unit-cube encoding, one-hot categoricals |
-| `XRDPattern`, `ICPResult` | raw traces, as a driver returns them |
-| `XRDDescriptors`, `CompositionDescriptors` | reduced numbers |
+| `XRDPattern`, `ICPResult`, `IRSpectrum`, `EchemCycleData` | raw traces, as a driver returns them |
+| `XRDDescriptors`, `CompositionDescriptors`, `IRDescriptors`, `EchemDescriptors` | reduced numbers |
 | `Objectives` | maximized values + feasibility constraints |
 | `Experiment` | lifecycle record, status, provenance refs |
 
-Objectives (phase formation, from powder XRD): maximize `target_phase_fraction` (weight
-fraction of the campaign's target phase from whole-pattern phase quantification) and
-`crystallinity` (framework Bragg intensity against Bragg plus amorphous halo), subject to
-isolated yield ≥ 0.35. ICP composition is recorded and
-used for the yield and charge-balance checks, but not optimized. A store recorded
-with different objectives is refused rather than mixed in; start a new campaign id.
+Objectives (default, phase formation from powder XRD): maximize `target_phase_fraction`
+(weight fraction of the campaign's target phase from whole-pattern phase quantification)
+and `crystallinity`, subject to isolated yield ≥ 0.35. A campaign can choose others with
+`--objectives`: `k_zn_selectivity`, `na_zn_selectivity`, `k_na_selectivity`,
+`zn_tolerance`, `zn_retention`, `zn_capacity`, `framework_stability` (from cycling in
+single-ion and mixed electrolytes, then ICP of the electrode and electrolyte). ICP
+composition (Na, K), IR Fe(II) share, the charge-balance residual and the drying-rate
+index are recorded for every run. A store recorded with different objectives is
+refused rather than mixed in; start a new campaign id.
 
 ## Provenance
 

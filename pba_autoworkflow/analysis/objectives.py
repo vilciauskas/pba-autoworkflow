@@ -100,11 +100,12 @@ def quality_flags(desc: SampleDescriptors, params: SynthesisParameters
             # surrogate on a fabricated composition.
             flags.append("vacancy fraction not determinable from the assay taken")
         else:
-            # Charge balance: Na+ occupancy cannot exceed 2 per completed framework.
+            # Charge balance: A+ (Na + K) occupancy cannot exceed 2 per completed
+            # framework.  (Loose: the exact Fe(II) ceiling is 4(1 - y) - 2.)
             na_ceiling = 2.0 * (1.0 - c.vacancy_fraction) + 0.15
-            if c.na_per_fu > na_ceiling:
+            if c.a_per_fu > na_ceiling:
                 flags.append(
-                    f"Na={c.na_per_fu:.2f} exceeds charge-balance ceiling "
+                    f"Na+K={c.a_per_fu:.2f} exceeds charge-balance ceiling "
                     f"{na_ceiling:.2f}"
                 )
             # The same threshold catches an implausibly *negative* vacancy, which is
@@ -119,8 +120,79 @@ def quality_flags(desc: SampleDescriptors, params: SynthesisParameters
     return QualityReport(passed=not flags, flags=flags)
 
 
-#: Objective names in canonical order.  All are maximized.
+#: Default objectives, in canonical order.  All are maximized.
 OBJECTIVE_NAMES: tuple[str, ...] = ("target_phase_fraction", "crystallinity")
+
+#: Every objective a campaign can choose (``CampaignConfig.objectives``).  All
+#: are scaled to [0, 1] with 0 the worst value, because the hypervolume uses the
+#: origin as its reference point.
+#:
+#: * ``*_selectivity``: separation factor alpha_A/B from competitive insertion,
+#:   mapped as 0.5 + log10(alpha)/8 (alpha = 1 -> 0.5; 1e4 -> 1; 1e-4 -> 0).
+#: * ``zn_tolerance``: 1 - k_zn_selectivity (prefers Zn2+ uptake despite K+).
+#: * ``zn_retention``: capacity retention in the Zn2+ electrolyte.
+#: * ``zn_capacity``: second-cycle capacity in Zn2+, / 150 mAh/g.
+#: * ``framework_stability``: 1 - Fe dissolved into the mixed electrolyte.
+OBJECTIVE_CATALOGUE: dict[str, str] = {
+    "target_phase_fraction": "xrd",
+    "crystallinity": "xrd",
+    "k_zn_selectivity": "echem",
+    "na_zn_selectivity": "echem",
+    "k_na_selectivity": "echem",
+    "zn_tolerance": "echem",
+    "zn_retention": "echem",
+    "zn_capacity": "echem",
+    "framework_stability": "echem",
+}
+
+#: Single-ion electrolytes (1 mol/L each) and mixed electrolytes each
+#: electrochemical objective needs.  The minor ion's concentration is chosen so
+#: that both ions take a measurable share of the charge for a formal-potential
+#: gap of ~0.1-0.25 V: at 0.1 M K+ against 1 M Zn2+, K+ carries > 99 % and the
+#: Zn uptake (by coulometric difference) is lost in the noise.
+ECHEM_REQUIREMENTS: dict[str, tuple[tuple[str, ...], tuple[dict[str, float], ...]]] = {
+    "k_zn_selectivity": (("Zn", "K"), ({"Zn": 1.0, "K": 0.005},)),
+    "zn_tolerance": (("Zn", "K"), ({"Zn": 1.0, "K": 0.005},)),
+    "na_zn_selectivity": (("Zn", "Na"), ({"Zn": 1.0, "Na": 0.02},)),
+    "k_na_selectivity": (("Na", "K"), ({"Na": 1.0, "K": 0.01},)),
+    "zn_retention": (("Zn",), ()),
+    "zn_capacity": (("Zn",), ()),
+    "framework_stability": ((), ({"Zn": 1.0, "K": 0.005},)),
+}
+_PAIR = {"k_zn_selectivity": "K/Zn", "na_zn_selectivity": "Na/Zn", "k_na_selectivity": "K/Na"}
+
+
+def echem_plan(objectives) -> tuple[tuple[str, ...], tuple[dict[str, float], ...]]:
+    """Union of the electrolytes the chosen objectives need."""
+    single: list[str] = []
+    mixed: list[dict[str, float]] = []
+    for o in objectives:
+        s, m = ECHEM_REQUIREMENTS.get(o, ((), ()))
+        single += [i for i in s if i not in single]
+        mixed += [d for d in m if d not in mixed]
+    return tuple(single), tuple(mixed)
+
+
+def validate_objectives(objectives) -> tuple[str, ...]:
+    objectives = tuple(objectives)
+    unknown = [o for o in objectives if o not in OBJECTIVE_CATALOGUE]
+    if unknown:
+        raise ValueError(f"unknown objective(s) {unknown}; choose from {sorted(OBJECTIVE_CATALOGUE)}")
+    if len(objectives) < 1 or len(set(objectives)) != len(objectives):
+        raise ValueError(f"objectives must be distinct and non-empty: {objectives}")
+    return objectives
+
+
+def _selectivity_score(alpha: float) -> float:
+    if not math.isfinite(alpha):
+        return 1.0 if alpha == float("inf") else 0.0
+    if alpha <= 0:
+        return 0.0
+    return float(np.clip(0.5 + math.log10(alpha) / 8.0, 0.0, 1.0))
+
+
+def _finite01(v, default: float = 0.0) -> float:
+    return float(np.clip(v, 0.0, 1.0)) if v is not None and math.isfinite(v) else default
 
 #: Target phase when a campaign does not name one.
 DEFAULT_TARGET_PHASE = "pba_fm3m"
@@ -145,17 +217,34 @@ def target_phase_fraction(desc: SampleDescriptors, target_phase: str) -> float:
 
 def compute_objectives(desc: SampleDescriptors, params: SynthesisParameters,
                        yield_floor: float = YIELD_FLOOR,
-                       target_phase: str = DEFAULT_TARGET_PHASE) -> Objectives:
-    """Map descriptors onto maximization objectives plus feasibility constraints."""
+                       target_phase: str = DEFAULT_TARGET_PHASE,
+                       objectives: tuple[str, ...] = OBJECTIVE_NAMES) -> Objectives:
+    """Map descriptors onto maximization objectives plus feasibility constraints.
+
+    A missing measurement scores 0 (the worst value), as a missing pattern
+    always has.
+    """
     x = desc.xrd
-    values = {
+    ec = desc.echem
+    all_values = {
         # Polymorph selectivity: how much of the crystalline product is the
         # phase this campaign wants (Hill-Howard weight fraction).
-        "target_phase_fraction": target_phase_fraction(desc, target_phase),
-        # Order: framework Bragg intensity against Bragg plus amorphous halo,
+        "target_phase_fraction": lambda: target_phase_fraction(desc, target_phase),
+        # Order: ordered framework scattering against that plus amorphous halo,
         # independent of which framework polymorph formed.
-        "crystallinity": float(x.crystallinity_index) if x is not None else 0.0,
+        "crystallinity": lambda: float(x.crystallinity_index) if x is not None else 0.0,
+        "zn_retention": lambda: _finite01(ec.retention.get("Zn")) if ec else 0.0,
+        "zn_capacity": lambda: _finite01(ec.capacity_mAh_g.get("Zn", float("nan")) / 150.0) if ec else 0.0,
+        "framework_stability": lambda: (_finite01(1.0 - ec.dissolved_fe_fraction)
+                                        if ec and math.isfinite(ec.dissolved_fe_fraction) else 0.0),
     }
+    for name, pair in _PAIR.items():
+        all_values[name] = (lambda pair=pair: _selectivity_score(ec.separation_factor.get(pair, float("nan")))
+                            if ec else 0.0)
+    all_values["zn_tolerance"] = lambda: (1.0 - _selectivity_score(ec.separation_factor["K/Zn"])
+                                          if ec and "K/Zn" in ec.separation_factor
+                                          and not math.isnan(ec.separation_factor["K/Zn"]) else 0.0)
+    values = {n: float(all_values[n]()) for n in objectives}
     y = desc.isolated_yield if desc.isolated_yield is not None else 0.0
     constraints = {"isolated_yield": float(y - yield_floor)}
     return Objectives(values=values, constraints=constraints,
@@ -181,8 +270,9 @@ def scalarize(obj: Objectives, weights: dict[str, float] | None = None,
     mode, and ranking the infeasible points among themselves by shortfall keeps
     the signal that tells the optimizer which direction restores feasibility.
     """
-    w = weights or {n: 1.0 / len(OBJECTIVE_NAMES) for n in OBJECTIVE_NAMES}
-    terms = [w[n] * obj.values.get(n, 0.0) for n in OBJECTIVE_NAMES]
+    names = list(obj.values) or list(OBJECTIVE_NAMES)
+    w = weights or {n: 1.0 / len(names) for n in names}
+    terms = [w[n] * obj.values.get(n, 0.0) for n in w]
     if not obj.feasible:
         shortfall = sum(-min(0.0, v) for v in obj.constraints.values())
         return float(-infeasible_penalty * (1.0 + shortfall))

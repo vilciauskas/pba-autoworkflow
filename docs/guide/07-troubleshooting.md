@@ -7,6 +7,23 @@ which device is failing, and read the per-experiment reasons in `report/experime
 cause, then `resume`. On the simulated deck with small batches this can also fire by chance; use
 larger batches or lower fault rates.
 
+**`unknown objective(s) [...]`.**
+Electrochemical objective names are built from ion symbols in lower case: `<a>_<b>_selectivity`,
+`<a>_retention`, `<a>_capacity`, with ions `li`, `na`, `k`, `nh4`, `mg`, `ca`, `zn`, `al`. The two
+ions of a selectivity must differ. `analysis.objectives.objective_catalogue()` lists every valid
+name.
+
+**A separation factor is NaN.**
+Two ions in the same mixed electrolyte could not be assayed directly: for example NH₄⁺ (invisible
+to ICP) together with the framework's own metal (Zn²⁺ in zinc hexacyanoferrate). Only one such
+ion per electrolyte can be recovered from the charge passed. Measure the pair on another framework
+or assay NH₄⁺ separately. A NaN α scores 0.
+
+**Electrochemical objectives are 0 for many samples.**
+If `WorkflowConfig.echem_gate` is set, samples below its XRD thresholds are not cycled and score
+0; the reason is in `metadata["echem_skipped"]` and in an `echem_gated` event. Lower the
+thresholds or set `echem_gate=None` (chapter 3 explains why a gate can stall a campaign).
+
 **`run` continued an old campaign instead of starting a new one.**
 `run` resumes when the `--campaign-id` already exists in `--runs`. Use a new id or a new `--runs`
 directory. A store is never overwritten.

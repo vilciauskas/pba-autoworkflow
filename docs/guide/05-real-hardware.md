@@ -29,6 +29,25 @@ stations (`vessel_id`, `experiment_id`, `station`, `contents_mL`, `solid_present
 desiccant or dry purge) or raise. The drying rate selects the zinc polymorph, so silently drying
 in air would corrupt the campaign.
 
+`Potentiostat.cycle` receives cation concentrations only, e.g. `{"Zn": 1.0, "K": 0.005}`. It
+must make up that electrolyte or raise. The salts the orchestrator expects are written to the
+event log just before each cell, as an `electrolyte` event that carries:
+
+- `salts_M`: sulfates, or nitrates when a sulfate would not dissolve (Ca²⁺);
+- `max_pH`: the hydrolysis limit, e.g. pH < 6 with Zn²⁺ and < 3.5 with Al³⁺;
+- `notes`.
+
+The same values are available from `ions.electrolyte_recipe(electrolyte_M)`.
+
+For each mixed electrolyte, the elemental analyzer then assays two samples:
+
+- the digested electrode, for the electrolyte's cations plus Fe and the framework metal;
+- the spent electrolyte, for Fe only (framework dissolution).
+
+NH₄⁺ is not requested, because ICP cannot measure it: its uptake is taken from the charge
+passed, so `discharge_q` must be per gram of active material and `active_mass_mg` must be
+correct.
+
 The data types a driver must return (`pba_autoworkflow.schema`):
 
 | Type | Fields |

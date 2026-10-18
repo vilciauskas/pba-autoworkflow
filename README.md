@@ -22,8 +22,9 @@ control, judged from powder XRD: each campaign targets one framework phase (for
 example cubic or rhombohedral R-3c zinc hexacyanoferrate). Drying temperature,
 pressure and gas and the hexacyanoferrate precursor (Na₄[Fe(CN)₆] or K₃[Fe(CN)₆])
 are part of the recipe. Optional stations add ATR-IR (Fe(II) share) and
-electrochemistry, so a campaign can also optimise Na⁺/K⁺/Zn²⁺ insertion selectivity,
-Zn²⁺ retention and framework stability.
+electrochemistry, so a campaign can also optimise insertion selectivity, retention and
+capacity for any ion of a configurable table (Li⁺, Na⁺, K⁺, NH₄⁺, Mg²⁺, Ca²⁺, Zn²⁺, Al³⁺),
+and framework stability.
 
 *This project has received funding under the grant agreement with the Research Council of Lithuania (LMTLT) (Project No. S-ITP-24-7).*
 
@@ -87,8 +88,10 @@ thermodynamics module, and troubleshooting. Runnable examples are in [`examples/
 └─────────────────┘                                   └─────────┬────────┘
                                                       ┌─────────▼────────┐
 ┌─────────────────┐                                   │ sim/             │
-│ schema.py       │  typed data model, design space    │ ground_truth,    │
-│ clock.py        │  timestamps vs durations          │ instruments      │
+│ schema.py       │  typed data model, design space   │ ground_truth,    │
+│ ions.py         │  ion table → objectives, cells    │ instruments,     │
+│ composition.py  │  A_xM[Fe(CN)6]_(1-y) template     │ electrochem      │
+│ clock.py        │  timestamps vs durations          │                  │
 └─────────────────┘                                   └──────────────────┘
 ```
 
@@ -195,7 +198,7 @@ characteristic silent failure of an automated platform.
 | type | role |
 |---|---|
 | `SynthesisParameters` | one validated recipe |
-| `DesignSpace` | physical ↔ unit-cube encoding, one-hot categoricals |
+| `DesignSpace` | physical ↔ unit-cube encoding, one-hot categoricals (with optional physical descriptors per choice) |
 | `XRDPattern`, `ICPResult`, `IRSpectrum`, `EchemCycleData` | raw traces, as a driver returns them |
 | `XRDDescriptors`, `CompositionDescriptors`, `IRDescriptors`, `EchemDescriptors` | reduced numbers |
 | `Objectives` | maximized values + feasibility constraints |

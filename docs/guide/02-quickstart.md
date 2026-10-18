@@ -276,6 +276,7 @@ Main options of `run` and `resume` (see `pba-autoworkflow run --help` for the fu
 | `--reactor-capacity` | 4 | Reactor positions |
 | `--seed` | 0 | Random seed for planner and simulator |
 | `--target-phase` | campaign's recorded target, else `pba_fm3m` | `pba_fm3m`, `pba_p21n` or `znhcf_r3c` |
-| `--objectives` | campaign's recorded objectives, else `target_phase_fraction,crystallinity` | Comma-separated; see chapter 3 |
+| `--objectives` | campaign's recorded objectives, else `target_phase_fraction,crystallinity` | Comma-separated, e.g. `target_phase_fraction,li_na_selectivity,li_retention`; see chapter 3 |
+| `--descriptors` | off | Correlate metals and precursors in the surrogate by physical descriptors (chapter 3, Planners) |
 | `--time-scale` | 0.0 | Fraction of simulated instrument time actually waited |
 | `--no-report` | off | Skip writing the report at the end |

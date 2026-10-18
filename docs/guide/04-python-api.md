@@ -80,6 +80,7 @@ All 20 experiments used only the four allowed metals, and none exceeded 80 °C (
 | `seed` | 0 | Random seed |
 | `target_phase` | `None` | Framework phase to optimise for; `None` keeps the campaign's recorded target, else `pba_fm3m` |
 | `objectives` | `None` | Objectives to maximise (chapter 3); `None` keeps the recorded ones, else `("target_phase_fraction", "crystallinity")` |
+| `use_descriptors` | `False` | Correlate metals and precursors in the surrogate by physical descriptors instead of as unrelated labels (chapter 3, Planners) |
 
 The CLI uses its own defaults for some of these (for example `--batch-size 8`).
 
@@ -96,6 +97,7 @@ Pass `workflow_config=WorkflowConfig(...)` to `Campaign` to change the measureme
 | `run_ir` | `True` (when the platform has an IR spectrometer) |
 | `echem_single_ions`, `echem_mixed_electrolytes` | filled from the campaign's objectives (chapter 3) |
 | `echem_current_mA_g`, `echem_n_cycles` | 100 mA/g, 20 |
+| `echem_gate` | `None` (cycle every sample). For example `{"target_phase_fraction": 0.5, "crystallinity": 0.25}` cycles only samples whose XRD passes; read the caveat in chapter 3 first |
 | `max_transport_retries`, `retry_backoff_s` | 2, 1.0 s |
 
 ## Reading results
@@ -110,7 +112,9 @@ campaign.dataframe()            # pandas DataFrame, one row per experiment
 exp = campaign.best_experiment()
 exp.parameters                  # SynthesisParameters (the recipe)
 exp.descriptors.xrd             # phase_fractions, phase_lattice, crystallinity_index, lattice_a_A, …
-exp.descriptors.composition     # na_per_fu, vacancy_fraction, formula, …
+exp.descriptors.composition     # a_site ({'Na': …, 'K': …}), vacancy_fraction, formula, …
+exp.descriptors.echem           # formal_potential_V, separation_factor ({'K/Zn': …}), retention, …
+exp.metadata.get("echem_skipped")   # reason, if an XRD gate skipped cycling
 exp.objectives.values           # {'target_phase_fraction': …, 'crystallinity': …}
 exp.objectives.feasible         # yield constraint satisfied?
 ```
@@ -129,6 +133,37 @@ exp = next(e for e in store.load_campaign("demo") if e.experiment_id == "demo-b0
 exp.raw_refs                                  # {'xrd': 'traces/….npz'}
 xrd = store.load_trace(exp.raw_refs["xrd"])   # {'two_theta_deg': array, 'intensity': array}
 ```
+
+In `campaign.dataframe()` and `report/experiments.csv`, dictionary-valued descriptors become one
+column per key, e.g. `comp_a_site_Na`, `comp_a_site_K`, `xrd_w_znhcf_r3c`.
+
+## Ions and objectives
+
+Objective names are generated from the ion table, so they can be listed and checked in code:
+
+```python
+from pba_autoworkflow import ions
+from pba_autoworkflow.analysis.objectives import objective_catalogue, echem_plan, validate_objectives
+
+len(objective_catalogue())                       # 76 names
+echem_plan(["li_na_selectivity", "mg_retention"])
+# (('Li', 'Na', 'Mg'), ({'Li': 1.0, 'Na': 0.01},))   single-ion cells, mixed electrolytes
+ions.pair_name("Li", "Na")                       # 'Na/Li'  key in EchemDescriptors.separation_factor
+ions.competitive_electrolyte("Mg", "Ca")         # {'Mg': 1.0, 'Ca': 0.01}
+r = ions.electrolyte_recipe({"Ca": 1.0, "Na": 0.01})
+r.anion, r.salts_M                               # 'nitrate', {'Ca(NO3)2': 1.0, 'NaNO3': 0.01}
+validate_objectives(["li_xx_selectivity"])       # ValueError: unknown objective(s) ['li_xx_selectivity']; …
+```
+
+**Adding an ion** is one entry in `ions.IONS`. The fields are `symbol`, `charge`, `radius_A`,
+`hydration_G_kJ`, `e0_V_SHE`, `electronegativity`, `icp_assayable`, `elements` (for
+polyatomic ions such as NH₄⁺), `sulfate_limit_M` and `max_pH`. Its retention, capacity and
+selectivity objectives then exist under its lower-case symbol.
+
+Any element the formula weight needs must be in `schema.ATOMIC_WEIGHT`. To give a new pair a
+measured, tuned mixed electrolyte, add it to `ions._TUNED_MIXTURES`, or pass
+`WorkflowConfig(echem_mixed_electrolytes=…)` for one campaign. The simulated deck gives a new
+ion a formal potential by rule (chapter 3); edit `sim/electrochem.py` to give it measured values.
 
 ## Using your own planner
 

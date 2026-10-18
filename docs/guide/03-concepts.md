@@ -74,7 +74,7 @@ example, stock solubility); `dry-run` shows these warnings.
 | Instrument | Raw data | Descriptors |
 |---|---|---|
 | XRD | 2θ pattern | Weight fraction and refined cell of each crystalline phase; unidentified intensity share; dominant framework phase; crystallinity index; cubic lattice constant *a*; coherent domain size and microstrain (Williamson–Hall, falling back to Scherrer); FWHM of the strongest framework line |
-| ICP + C | Element concentrations, dry mass | Na and K per formula unit; Fe/M ratio; vacancy fraction *y*; water content; formula; CN deficit 6·Fe − C (decyanation) |
+| ICP + C | Element concentrations, dry mass | A-site occupancy per formula unit for every assayed ion (`a_site`, e.g. Na and K); Fe/M ratio; vacancy fraction *y*; water content; formula; CN deficit 6·Fe − C (decyanation) |
 | IR | ATR-IR, 1950–2300 cm⁻¹ | Fe(II) share of the hexacyanoferrate; band positions |
 | ICP + IR | — | Charge-balance residual: measured Na + K minus the (1 − *y*)(3 + *f*<sub>Fe(II)</sub>) − 2 the framework charge needs |
 | Electrochemistry | Galvanostatic curves; electrode and electrolyte digests | Per ion: formal potential, capacity, retention, plateau fraction; separation factors α; Fe dissolved |
@@ -361,8 +361,9 @@ vessel is in the reactor, the vessel is ejected so its position is freed.
 
 The Bayesian planner fits one Gaussian process per objective and one for the yield constraint.
 Each uses a Matérn-5/2 kernel with automatic relevance determination over the continuous
-parameters, multiplied by an exchangeable kernel over metals, so that information is shared
-between metals. Hyperparameters, including the noise level, are fitted by maximising the
+parameters, multiplied by a kernel over each categorical choice (metal, precursor). By default
+that kernel is exchangeable: every pair of different metals shares one learned correlation, so
+information is shared between metals without assuming which are alike. Hyperparameters, including the noise level, are fitted by maximising the
 marginal likelihood. Candidates come from global Sobol' coverage plus local perturbations of the
 current front. A batch is selected greedily with the *kriging believer* heuristic. Until at least
 8 usable results exist, the planner continues with Sobol' points (logged as `sobol-warmup`).

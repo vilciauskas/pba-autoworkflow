@@ -4,7 +4,9 @@ PBA Autonomous Workflow is a closed-loop orchestrator for the synthesis of Pruss
 analogues (PBAs), Na<sub>x</sub>M[Fe(CN)<sub>6</sub>]<sub>1−y</sub>·nH<sub>2</sub>O. It proposes
 co-precipitation recipes, runs them on an automated deck, reduces the powder XRD pattern to phase
 purity, crystallinity and lattice descriptors (with ICP for composition), and uses multi-objective
-Bayesian optimisation to choose the next batch. The current focus is phase formation.
+Bayesian optimisation to choose the next batch. The current focus is phase formation; optional
+electrochemistry stages score insertion selectivity, retention and capacity for any ion of a
+configurable table (Li⁺, Na⁺, K⁺, NH₄⁺, Mg²⁺, Ca²⁺, Zn²⁺, Al³⁺).
 
 Read the chapters in order the first time; after that, each one stands alone.
 
@@ -12,8 +14,8 @@ Read the chapters in order the first time; after that, each one stands alone.
 |---|---|
 | [1. Installation](01-installation.md) | Python environments, optional extras, model weights |
 | [2. Quick start](02-quickstart.md) | A complete campaign on the simulated deck, command by command |
-| [3. Concepts](03-concepts.md) | Design space, objectives, quality control, planners, stopping rules, provenance |
-| [4. Python API](04-python-api.md) | Running and customising campaigns from code; reading results |
+| [3. Concepts](03-concepts.md) | Design space, objectives, ions and electrochemistry, quality control, planners, stopping rules, provenance |
+| [4. Python API](04-python-api.md) | Running and customising campaigns from code; ions and objectives; reading results |
 | [5. Connecting real instruments](05-real-hardware.md) | The device protocols, error classes, and an example driver |
 | [6. Thermodynamics module](06-thermodynamics.md) | Force-field hulls, the campaign advisor, and what has been validated |
 | [7. Troubleshooting](07-troubleshooting.md) | Common problems and their fixes |

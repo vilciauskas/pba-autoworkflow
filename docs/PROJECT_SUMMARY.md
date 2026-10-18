@@ -10,8 +10,9 @@ the same numbers are in [key_results.json](key_results.json) in machine-readable
 
 ## 1. Summary
 
-1. **An orchestrator for an autonomous PBA lab was built and tested** (`pba_autoworkflow`, 33 source
-   files, 7,376 lines; 5 test files, 1,734 lines; 98 tests passing). It runs
+1. **An orchestrator for an autonomous PBA lab was built and tested** (`pba_autoworkflow`, 39 source
+   files, 10,148 lines; 7 test files, 2,575 lines; 156 tests passing, plus 4 slow force-field tests
+   run separately). It runs
    the full loop: plan → schedule on shared instruments → execute → analyse raw instrument
    traces → update a multi-objective surrogate → plan again. It also keeps a provenance store,
    recovers from crashes and resumes campaigns.
@@ -49,6 +50,8 @@ the same numbers are in [key_results.json](key_results.json) in machine-readable
 | Analysis | `analysis/` | XRD and elemental traces → descriptors → objectives |
 | Optimisation | `optimize/` | GP surrogate; qNEHVI, Sobol and random planners |
 | Data model | `schema.py` | pydantic models, units in field names (`c_metal_M`, `temperature_C`) |
+| Ions | `ions.py` | ion properties (charge, Shannon radius, Marcus hydration energy, assayability, salt rules); generates objectives and electrolytes |
+| Composition | `composition.py` | A<sub>x</sub>M[Fe(CN)₆]<sub>1−y</sub>·zH₂O site template: formula weight, charge balance, formula |
 | Provenance | `provenance.py` | SQLite `campaign.db` plus raw traces as `.npz` |
 | Simulator | `sim/` | hidden ground-truth chemistry and instrument physics |
 | Thermodynamics | `thermo/` | force-field and DFT hulls, the advisory prior (Sections 4–6) |
@@ -65,13 +68,24 @@ of being silently corrected.
   `stir_rate_rpm`, `dry_temperature_C`, `dry_pressure_mbar`, `dry_gas`.
 - **Objectives:** chosen per campaign. Default: weight fraction of a chosen target phase and
   crystallinity, from whole-pattern XRD phase quantification. Optional electrochemical
-  objectives (Na⁺/K⁺/Zn²⁺ separation factors, Zn²⁺ retention and capacity, framework
-  stability) after the group's zinc hexacyanoferrate study, which also motivated drying pressure
+  objectives (separation factors, retention and capacity for any ion of the ion table: Li⁺, Na⁺,
+  K⁺, NH₄⁺, Mg²⁺, Ca²⁺, Zn²⁺, Al³⁺; framework stability), first for Na⁺/K⁺/Zn²⁺ after the group's
+  zinc hexacyanoferrate study, which also motivated drying pressure
   and gas, the K₃[Fe(CN)₆] precursor, K in the composition, and IR Fe(II). Zn and drying
   temperature/atmosphere were added for polymorph control. Before that the objectives were
   XRD phase purity and crystallinity, and before that the objectives were sodium inventory and framework integrity from ICP, and a
   UV-Vis supernatant measurement was part of the workflow; both were removed to focus on phase
   formation.
+- **Ion-generic electrochemistry:** objective names, mixed electrolytes (preferred ion dilute),
+  salt choice and pH limits, and the assay route (ICP, or charge passed for the framework metal
+  and NH₄⁺) all follow from the ion table. The simulator's potentials for ions other than Na⁺,
+  K⁺ and Zn²⁺ are set by rule and are illustrative only.
+- **Two options were benchmarked and left off by default.**
+  - *Physical descriptors for metals in the surrogate.* With one metal held out, they halved its
+    prediction error (RMSE 2.07 → 1.08). In 8 paired simulated campaigns the final hypervolume was
+    0.804 against 0.792, within seed-to-seed scatter.
+  - *An XRD gate before cycling.* It stalled the zinc-tolerance campaign at hypervolume 0, because
+    it skipped the only zinc samples with any Zn²⁺ tolerance.
 - **Replicates are scheduled, not assumed**, so platform noise is estimated from data.
 - **Fault handling:** experiments are `complete`, `failed` or `quarantined`. A hardware fault
   ends one experiment, not the whole campaign.

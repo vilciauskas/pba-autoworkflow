@@ -46,9 +46,10 @@ from dataclasses import dataclass, field
 
 from .prior import HullPrior
 
-#: Below this many measured samples in a metal series, neither check reports a
-#: verdict.  Three points is the minimum that can show a trend rather than a
-#: line, and two of them are the endpoints.
+#: Below this many usable measured samples, counted over all metals whose hull
+#: has a resolvable feature, neither check reports a verdict.  Three points are
+#: the fewest that can show a trend rather than a line; one more is required
+#: so that a single outlier cannot decide the verdict.
 MIN_SERIES = 4
 
 

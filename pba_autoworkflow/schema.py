@@ -38,8 +38,12 @@ METALS: tuple[str, ...] = ("Mn", "Fe", "Co", "Ni", "Cu", "Zn")
 
 #: Atomic weights (g/mol) needed for formula-weight bookkeeping.
 ATOMIC_WEIGHT: dict[str, float] = {
+    "Li": 6.941,
     "Na": 22.9898,
     "K": 39.0983,
+    "Mg": 24.305,
+    "Ca": 40.078,
+    "Al": 26.9815,
     "Mn": 54.9380,
     "Fe": 55.8450,
     "Co": 58.9332,
@@ -93,46 +97,47 @@ LATTICE_A0_A: dict[str, float] = {
 
 
 def formula_weight(metal: str, na_per_fu: float, vacancy_fraction: float,
-                   water_per_fu: float, k_per_fu: float = 0.0) -> float:
-    """Formula weight (g/mol) of Na_n K_k M[Fe(CN)6]_(1-y) . zH2O."""
-    hcf = ATOMIC_WEIGHT["Fe"] + 6 * (ATOMIC_WEIGHT["C"] + ATOMIC_WEIGHT["N"])
-    # A measured vacancy may be marginally negative from assay error; an
-    # occupancy above unity is not a physical structure, so clamp here.
-    vacancy_fraction = min(max(vacancy_fraction, 0.0), 0.9)
-    return (
-        na_per_fu * ATOMIC_WEIGHT["Na"]
-        + k_per_fu * ATOMIC_WEIGHT["K"]
-        + ATOMIC_WEIGHT[metal]
-        + (1.0 - vacancy_fraction) * hcf
-        + water_per_fu * (2 * ATOMIC_WEIGHT["H"] + ATOMIC_WEIGHT["O"])
-    )
+                   water_per_fu: float, k_per_fu: float = 0.0,
+                   a_site: dict[str, float] | None = None) -> float:
+    """Formula weight (g/mol) of A_x M[Fe(CN)6]_(1-y) . zH2O.
+
+    The A site is ``a_site`` (ion -> per formula unit) when given, else Na and
+    K from the positional arguments.  See :mod:`pba_autoworkflow.composition`.
+    """
+    from .composition import PBA, a_site_from
+    return PBA.formula_weight(metal, a_site_from(na_per_fu, k_per_fu, a_site),
+                              vacancy_fraction, water_per_fu)
 
 
 def charge_balanced_a(vacancy_fraction: float, fe2_fraction: float = 1.0) -> float:
-    """Monovalent A-cations per formula unit that make A_x M[Fe(CN)6]_(1-y) neutral.
+    """A-site charge per formula unit that makes A_x M[Fe(CN)6]_(1-y) neutral.
 
-    ``x = (1 - y)(3 + f) - 2`` for M(II), where ``f`` is the Fe(II) share of the
-    hexacyanoferrate: [Fe(II)(CN)6] carries -4, [Fe(III)(CN)6] -3.  Fe(II) with
-    no vacancies gives the familiar x = 2; Zn3[Fe(III)(CN)6]2 (y = 1/3, f = 0)
-    gives x = 0.  Negative values mean the framework cannot be neutral without
-    another anion (OH-, coordinated water deprotonation) and are returned as is.
+    ``(1 - y)(3 + f) - 2`` for M(II), where ``f`` is the Fe(II) share of the
+    hexacyanoferrate: [Fe(II)(CN)6] carries -4, [Fe(III)(CN)6] -3.  For
+    monovalent A ions this is the A count.  Fe(II) with no vacancies gives 2;
+    Zn3[Fe(III)(CN)6]2 (y = 1/3, f = 0) gives 0.  Negative values mean the
+    framework cannot be neutral without another anion and are returned as is.
     Same convention as :func:`pba_autoworkflow.thermo.structures.charge_balanced_na`.
     """
-    return (1.0 - vacancy_fraction) * (3.0 + fe2_fraction) - 2.0
+    from .composition import PBA
+    return PBA.required_a_charge(vacancy_fraction, fe2_fraction)
 
 
 def theoretical_capacity_mAh_g(metal: str, na_per_fu: float,
                                vacancy_fraction: float, water_per_fu: float,
-                               k_per_fu: float = 0.0) -> float:
-    """Theoretical capacity for the extractable A-cation (Na + K) inventory.
+                               k_per_fu: float = 0.0,
+                               a_site: dict[str, float] | None = None) -> float:
+    """Theoretical capacity for the extractable A-site charge.
 
     Zn(II) has no accessible redox couple, so in a Zn framework only the
-    [Fe(CN)6] site can be oxidised and at most 1 - y A per formula unit is
-    extractable (the rest stays in the formula weight).
+    [Fe(CN)6] site can be oxidised and at most 1 - y charge per formula unit
+    is extractable (the rest stays in the formula weight).
     """
-    fw = formula_weight(metal, na_per_fu, vacancy_fraction, water_per_fu, k_per_fu)
-    a = na_per_fu + k_per_fu
-    active = min(a, max(1.0 - vacancy_fraction, 0.0)) if metal == "Zn" else a
+    from .composition import PBA, a_site_from
+    a = a_site_from(na_per_fu, k_per_fu, a_site)
+    fw = PBA.formula_weight(metal, a, vacancy_fraction, water_per_fu)
+    q = PBA.a_charge(a)
+    active = min(q, max(1.0 - vacancy_fraction, 0.0)) if metal == "Zn" else q
     return active * FARADAY_C_PER_MOL / (3.6 * fw)
 
 
@@ -235,6 +240,27 @@ class CategoricalSpec(BaseModel):
     name: str
     choices: tuple[str, ...]
     description: str = ""
+    #: physical descriptors per choice (e.g. ionic radius, electronegativity).
+    #: When given for every choice, the surrogate correlates choices by their
+    #: distance in descriptor space instead of treating them as exchangeable,
+    #: so results on one metal inform the prediction for a similar one.
+    descriptors: dict[str, tuple[float, ...]] | None = None
+    descriptor_names: tuple[str, ...] = ()
+
+    def descriptor_matrix(self) -> np.ndarray | None:
+        """Standardised descriptor rows in ``choices`` order, or None.
+
+        Columns are scaled to zero mean and unit variance over the choices;
+        constant columns are dropped.  None if any choice lacks descriptors.
+        """
+        if not self.descriptors or any(c not in self.descriptors for c in self.choices):
+            return None
+        D = np.array([self.descriptors[c] for c in self.choices], dtype=float)
+        sd = D.std(axis=0)
+        keep = sd > 1e-12
+        if not keep.any():
+            return None
+        return (D[:, keep] - D[:, keep].mean(axis=0)) / sd[keep]
 
 
 class DesignSpace(BaseModel):
@@ -272,6 +298,15 @@ class DesignSpace(BaseModel):
             blocks.append((cat.name, list(range(offset, offset + len(cat.choices)))))
             offset += len(cat.choices)
         return blocks
+
+    def categorical_descriptors(self) -> dict[str, np.ndarray]:
+        """Block name -> standardised descriptor matrix, for blocks that have one."""
+        out = {}
+        for cat in self.categorical:
+            D = cat.descriptor_matrix()
+            if D is not None:
+                out[cat.name] = D
+        return out
 
     def encode(self, params: "SynthesisParameters") -> np.ndarray:
         raw = params.model_dump()
@@ -377,6 +412,23 @@ class SynthesisParameters(BaseModel):
         )
 
 
+#: Descriptors used for the framework-metal choice (see ``ions.FRAMEWORK_METALS``).
+METAL_DESCRIPTOR_NAMES = ("radius_A", "electronegativity", "hydration_G_kJ", "redox_active")
+
+
+def metal_descriptors(metals=None) -> dict[str, tuple[float, ...]]:
+    from .ions import FRAMEWORK_METALS
+    metals = metals or METALS
+    return {m: tuple(float(FRAMEWORK_METALS[m][k]) for k in METAL_DESCRIPTOR_NAMES)
+            for m in metals if m in FRAMEWORK_METALS}
+
+
+def precursor_descriptors() -> dict[str, tuple[float, ...]]:
+    from .ions import ion
+    return {p: (ion(HCF_PRECURSOR_INFO[p][0]).radius_A, float(HCF_PRECURSOR_INFO[p][2]))
+            for p in HCF_PRECURSORS}
+
+
 def default_design_space() -> DesignSpace:
     """The design space used by the reference PBA campaign.
 
@@ -418,9 +470,13 @@ def default_design_space() -> DesignSpace:
         ),
         categorical=(
             CategoricalSpec(name="metal", choices=METALS,
-                            description="divalent metal on the N-coordinated site"),
+                            description="divalent metal on the N-coordinated site",
+                            descriptors=metal_descriptors(),
+                            descriptor_names=METAL_DESCRIPTOR_NAMES),
             CategoricalSpec(name="hcf_precursor", choices=HCF_PRECURSORS,
-                            description="Na4[Fe(CN)6] (Fe(II), Na+) or K3[Fe(CN)6] (Fe(III), K+)"),
+                            description="Na4[Fe(CN)6] (Fe(II), Na+) or K3[Fe(CN)6] (Fe(III), K+)",
+                            descriptors=precursor_descriptors(),
+                            descriptor_names=("a_cation_radius_A", "fe_oxidation_state")),
             CategoricalSpec(name="dry_gas", choices=("ambient", "dry"),
                             description="drying gas: ambient lab air or dry (desiccant/purge)"),
         ),
@@ -592,10 +648,29 @@ class CompositionDescriptors(BaseModel):
     def _cn_null(cls, v):
         return float("nan") if v is None else v
 
+    #: A-site occupancy per formula unit, by ion.  Filled from ``na_per_fu`` /
+    #: ``k_per_fu`` for records written before it existed.
+    a_site: dict[str, float] = Field(default_factory=dict)
+
+    @model_validator(mode="after")
+    def _fill_a_site(self):
+        if not self.a_site:
+            a = {"Na": float(self.na_per_fu)}
+            if self.k_per_fu:
+                a["K"] = float(self.k_per_fu)
+            object.__setattr__(self, "a_site", a)
+        return self
+
     @property
     def a_per_fu(self) -> float:
-        """Total monovalent A-cations (Na + K) per formula unit."""
-        return self.na_per_fu + self.k_per_fu
+        """Total A cations per formula unit (all ions)."""
+        return float(sum(self.a_site.values()))
+
+    @property
+    def a_charge_per_fu(self) -> float:
+        """Positive A-site charge per formula unit."""
+        from .ions import charge
+        return float(sum(charge(s) * x for s, x in self.a_site.items()))
 
     @field_validator("vacancy_fraction")
     @classmethod

@@ -37,10 +37,12 @@ import math
 
 import numpy as np
 
+from .. import ions as I
 from ..schema import FARADAY_C_PER_MOL, EchemCycleData, EchemDescriptors, ICPResult
 
 RT_F_25C = 8.314462618 * 298.15 / FARADAY_C_PER_MOL
-CHARGE = {"Zn": 2, "Na": 1, "K": 1, "Li": 1, "Mg": 2, "Ca": 2}
+#: ion -> charge, for every ion in the ion table
+CHARGE = {s: i.charge for s, i in I.IONS.items()}
 
 
 def _avg_potential(q: np.ndarray, E: np.ndarray) -> float:
@@ -94,24 +96,32 @@ def inserted_per_fe(data: EchemCycleData, electrode: ICPResult,
                     fe_per_fu: float | None) -> dict[str, float]:
     """Inserted cations per Fe after the final discharge.
 
-    Assayed directly for every ion except ``framework_metal``, which is taken by
-    coulometric difference (needs ``formula_weight`` and ``fe_per_fu``).
+    Assayed directly for every ion except one that cannot be: the framework's
+    own metal (lost against the framework content) or an ion ICP does not see
+    (NH4+).  That ion is taken by coulometric difference -- charge passed in
+    the final discharge minus the charge carried by the assayed ions -- which
+    needs ``formula_weight`` and ``fe_per_fu``.  With two such ions in one
+    electrolyte neither can be resolved; both are NaN.
     """
     conc = electrode.concentrations_mol_L
     fe = conc.get("Fe", 0.0)
     ions = [i for i, c in data.electrolyte_M.items() if c > 0]
+    hidden = I.coulometric_ion(ions, framework_metal)
     out = {}
     for i in ions:
-        if i != framework_metal:
+        if i not in hidden:
             out[i] = conc.get(i, 0.0) / fe if fe > 0 else float("nan")
-    if framework_metal in ions:
+    if len(hidden) == 1:
+        h = hidden[0]
         if not formula_weight or not fe_per_fu:
-            out[framework_metal] = float("nan")
+            out[h] = float("nan")
         else:
             q = float(data.discharge_q[-1][-1])                     # mAh/g
             e_per_fe = q * 3.6 * formula_weight / FARADAY_C_PER_MOL / fe_per_fu
             rest = sum(CHARGE[i] * v for i, v in out.items() if math.isfinite(v))
-            out[framework_metal] = max(e_per_fe - rest, 0.0) / CHARGE[framework_metal]
+            out[h] = max(e_per_fe - rest, 0.0) / CHARGE[h]
+    else:
+        out.update({h: float("nan") for h in hidden})
     return out
 
 
@@ -143,17 +153,13 @@ def build_echem_descriptors(single: dict[str, EchemCycleData],
         d.n_cycles = max(d.n_cycles, len(data.discharge_q))
     dissolved = []
     for data, electrode, electrolyte in mixed:
-        ions = sorted((i for i, c in data.electrolyte_M.items() if c > 0),
-                      key=lambda i: (CHARGE[i], i))
+        ions = sorted(i for i, c in data.electrolyte_M.items() if c > 0)
         for i, a in enumerate(ions):
             for b in ions[i + 1:]:
-                # lower charge first (alpha_K/Zn, alpha_Na/Zn); same charge:
-                # larger cation first (alpha_K/Na)
-                if CHARGE[a] == CHARGE[b]:
-                    hi, lo = (a, b) if a == "K" else (b, a)
-                else:
-                    hi, lo = a, b
-                pair = f"{hi}/{lo}"
+                # canonical order: lower charge first, then the more weakly
+                # hydrated ion (alpha_K/Zn, alpha_Na/Zn, alpha_K/Na)
+                pair = I.pair_name(a, b)
+                hi, lo = pair.split("/")
                 x = inserted_per_fe(data, electrode, framework_metal, formula_weight, fe_per_fu)
                 d.separation_factor[pair] = separation_from_inserted(x, hi, lo, data.electrolyte_M)
                 if hi in d.formal_potential_V and lo in d.formal_potential_V:

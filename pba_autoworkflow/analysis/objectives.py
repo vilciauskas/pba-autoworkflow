@@ -123,64 +123,114 @@ def quality_flags(desc: SampleDescriptors, params: SynthesisParameters
 #: Default objectives, in canonical order.  All are maximized.
 OBJECTIVE_NAMES: tuple[str, ...] = ("target_phase_fraction", "crystallinity")
 
-#: Every objective a campaign can choose (``CampaignConfig.objectives``).  All
-#: are scaled to [0, 1] with 0 the worst value, because the hypervolume uses the
-#: origin as its reference point.
+#: Objectives a campaign can choose (``CampaignConfig.objectives``).  All are
+#: scaled to [0, 1] with 0 the worst value, because the hypervolume uses the
+#: origin as its reference point.  Electrochemical names are generated from the
+#: ion table (:mod:`pba_autoworkflow.ions`), for any ions ``a``, ``b`` there:
 #:
-#: * ``*_selectivity``: separation factor alpha_A/B from competitive insertion,
-#:   mapped as 0.5 + log10(alpha)/8 (alpha = 1 -> 0.5; 1e4 -> 1; 1e-4 -> 0).
-#: * ``zn_tolerance``: 1 - k_zn_selectivity (prefers Zn2+ uptake despite K+).
-#: * ``zn_retention``: capacity retention in the Zn2+ electrolyte.
-#: * ``zn_capacity``: second-cycle capacity in Zn2+, / 150 mAh/g.
-#: * ``framework_stability``: 1 - Fe dissolved into the mixed electrolyte.
-OBJECTIVE_CATALOGUE: dict[str, str] = {
-    "target_phase_fraction": "xrd",
-    "crystallinity": "xrd",
-    "k_zn_selectivity": "echem",
-    "na_zn_selectivity": "echem",
-    "k_na_selectivity": "echem",
-    "zn_tolerance": "echem",
-    "zn_retention": "echem",
-    "zn_capacity": "echem",
-    "framework_stability": "echem",
-}
+#: * ``<a>_<b>_selectivity``: separation factor alpha_a/b from competitive
+#:   insertion out of a mixed a/b electrolyte, mapped as 0.5 + log10(alpha)/8
+#:   (alpha = 1 -> 0.5; 1e4 -> 1; 1e-4 -> 0).  ``<b>_<a>_selectivity`` is
+#:   1 minus it.  e.g. ``k_zn_selectivity``, ``li_na_selectivity``.
+#: * ``<a>_retention``: discharge capacity retention in the a electrolyte.
+#: * ``<a>_capacity``: second-cycle discharge capacity in a, / 150 mAh/g.
+#: * ``framework_stability``: 1 - fraction of the electrode's Fe dissolved
+#:   into the mixed electrolyte(s).
+#: * ``zn_tolerance``: alias of ``zn_k_selectivity`` (Zn2+ uptake despite K+).
+XRD_OBJECTIVES = ("target_phase_fraction", "crystallinity")
+ALIASES = {"zn_tolerance": "zn_k_selectivity"}
+#: alpha range mapped onto [0, 1]: 10^-4 .. 10^4.  Changing it changes the
+#: scores of stored campaigns, which are not recomputed on resume.
+SELECTIVITY_SCALE_DECADES = 4.0
 
-#: Single-ion electrolytes (1 mol/L each) and mixed electrolytes each
-#: electrochemical objective needs.  The minor ion's concentration is chosen so
-#: that both ions take a measurable share of the charge for a formal-potential
-#: gap of ~0.1-0.25 V: at 0.1 M K+ against 1 M Zn2+, K+ carries > 99 % and the
-#: Zn uptake (by coulometric difference) is lost in the noise.
-ECHEM_REQUIREMENTS: dict[str, tuple[tuple[str, ...], tuple[dict[str, float], ...]]] = {
-    "k_zn_selectivity": (("Zn", "K"), ({"Zn": 1.0, "K": 0.005},)),
-    "zn_tolerance": (("Zn", "K"), ({"Zn": 1.0, "K": 0.005},)),
-    "na_zn_selectivity": (("Zn", "Na"), ({"Zn": 1.0, "Na": 0.02},)),
-    "k_na_selectivity": (("Na", "K"), ({"Na": 1.0, "K": 0.01},)),
-    "zn_retention": (("Zn",), ()),
-    "zn_capacity": (("Zn",), ()),
-    "framework_stability": ((), ({"Zn": 1.0, "K": 0.005},)),
-}
-_PAIR = {"k_zn_selectivity": "K/Zn", "na_zn_selectivity": "Na/Zn", "k_na_selectivity": "K/Na"}
+
+def parse_objective(name: str) -> tuple:
+    """``("xrd", name)``, ``("selectivity", a, b)``, ``("retention", a)``,
+    ``("capacity", a)`` or ``("stability",)``.  Raises on unknown names."""
+    from .. import ions as I
+    if name in XRD_OBJECTIVES:
+        return ("xrd", name)
+    if name == "framework_stability":
+        return ("stability",)
+    canon = ALIASES.get(name, name)
+    parts = canon.split("_")
+    try:
+        if len(parts) == 3 and parts[2] == "selectivity":
+            a, b = I.from_key(parts[0]), I.from_key(parts[1])
+            if a == b:
+                raise ValueError
+            return ("selectivity", a, b)
+        if len(parts) == 2 and parts[1] in ("retention", "capacity"):
+            return (parts[1], I.from_key(parts[0]))
+    except ValueError:
+        pass
+    raise ValueError(f"unknown objective {name!r}; see objective_catalogue()")
+
+
+def objective_catalogue() -> dict[str, str]:
+    """Every objective name with its measurement ("xrd" or "echem")."""
+    from .. import ions as I
+    out = {n: "xrd" for n in XRD_OBJECTIVES}
+    keys = [I.key(x) for x in I.IONS]
+    for a in keys:
+        for b in keys:
+            if a != b:
+                out[f"{a}_{b}_selectivity"] = "echem"
+        out[f"{a}_retention"] = "echem"
+        out[f"{a}_capacity"] = "echem"
+    out["framework_stability"] = "echem"
+    out.update({k: "echem" for k in ALIASES})
+    return out
+
+
+#: Kept for callers of the earlier fixed table.
+OBJECTIVE_CATALOGUE = objective_catalogue()
+
+
+def echem_requirements(name: str) -> tuple[tuple[str, ...], tuple[dict[str, float], ...]]:
+    """(single-ion electrolytes, mixed electrolytes) an objective needs."""
+    from .. import ions as I
+    kind = parse_objective(name)
+    if kind[0] == "selectivity":
+        a, b = kind[1], kind[2]
+        return tuple(sorted((a, b))), (I.competitive_electrolyte(a, b),)
+    if kind[0] in ("retention", "capacity"):
+        return (kind[1],), ()
+    if kind[0] == "stability":
+        return (), ()          # uses whatever mixed electrolytes run; Zn/K if none
+    return (), ()
 
 
 def echem_plan(objectives) -> tuple[tuple[str, ...], tuple[dict[str, float], ...]]:
     """Union of the electrolytes the chosen objectives need."""
+    from .. import ions as I
     single: list[str] = []
     mixed: list[dict[str, float]] = []
     for o in objectives:
-        s, m = ECHEM_REQUIREMENTS.get(o, ((), ()))
+        s, m = echem_requirements(o)
         single += [i for i in s if i not in single]
         mixed += [d for d in m if d not in mixed]
+    if "framework_stability" in objectives and not mixed:
+        mixed.append(I.competitive_electrolyte("Zn", "K"))
     return tuple(single), tuple(mixed)
 
 
 def validate_objectives(objectives) -> tuple[str, ...]:
     objectives = tuple(objectives)
-    unknown = [o for o in objectives if o not in OBJECTIVE_CATALOGUE]
-    if unknown:
-        raise ValueError(f"unknown objective(s) {unknown}; choose from {sorted(OBJECTIVE_CATALOGUE)}")
     if len(objectives) < 1 or len(set(objectives)) != len(objectives):
         raise ValueError(f"objectives must be distinct and non-empty: {objectives}")
+    for o in objectives:
+        try:
+            parse_objective(o)
+        except ValueError:
+            raise ValueError(f"unknown objective(s) [{o!r}]; e.g. {list(XRD_OBJECTIVES)}, "
+                             "'k_zn_selectivity', 'li_retention', 'framework_stability' "
+                             "(see objective_catalogue())") from None
     return objectives
+
+
+def is_echem(name: str) -> bool:
+    return parse_objective(name)[0] != "xrd"
 
 
 def _selectivity_score(alpha: float) -> float:
@@ -188,7 +238,7 @@ def _selectivity_score(alpha: float) -> float:
         return 1.0 if alpha == float("inf") else 0.0
     if alpha <= 0:
         return 0.0
-    return float(np.clip(0.5 + math.log10(alpha) / 8.0, 0.0, 1.0))
+    return float(np.clip(0.5 + math.log10(alpha) / (2 * SELECTIVITY_SCALE_DECADES), 0.0, 1.0))
 
 
 def _finite01(v, default: float = 0.0) -> float:
@@ -226,25 +276,35 @@ def compute_objectives(desc: SampleDescriptors, params: SynthesisParameters,
     """
     x = desc.xrd
     ec = desc.echem
-    all_values = {
-        # Polymorph selectivity: how much of the crystalline product is the
-        # phase this campaign wants (Hill-Howard weight fraction).
-        "target_phase_fraction": lambda: target_phase_fraction(desc, target_phase),
-        # Order: ordered framework scattering against that plus amorphous halo,
-        # independent of which framework polymorph formed.
-        "crystallinity": lambda: float(x.crystallinity_index) if x is not None else 0.0,
-        "zn_retention": lambda: _finite01(ec.retention.get("Zn")) if ec else 0.0,
-        "zn_capacity": lambda: _finite01(ec.capacity_mAh_g.get("Zn", float("nan")) / 150.0) if ec else 0.0,
-        "framework_stability": lambda: (_finite01(1.0 - ec.dissolved_fe_fraction)
-                                        if ec and math.isfinite(ec.dissolved_fe_fraction) else 0.0),
-    }
-    for name, pair in _PAIR.items():
-        all_values[name] = (lambda pair=pair: _selectivity_score(ec.separation_factor.get(pair, float("nan")))
-                            if ec else 0.0)
-    all_values["zn_tolerance"] = lambda: (1.0 - _selectivity_score(ec.separation_factor["K/Zn"])
-                                          if ec and "K/Zn" in ec.separation_factor
-                                          and not math.isnan(ec.separation_factor["K/Zn"]) else 0.0)
-    values = {n: float(all_values[n]()) for n in objectives}
+    from .. import ions as I
+
+    def value(name: str) -> float:
+        kind = parse_objective(name)
+        if kind[0] == "xrd":
+            if name == "target_phase_fraction":
+                # Polymorph selectivity: how much of the crystalline product is
+                # the phase this campaign wants (Hill-Howard weight fraction).
+                return target_phase_fraction(desc, target_phase)
+            # Order: ordered framework scattering against that plus the halo.
+            return float(x.crystallinity_index) if x is not None else 0.0
+        if ec is None:
+            return 0.0
+        if kind[0] == "selectivity":
+            a, b = kind[1], kind[2]
+            key = I.pair_name(a, b)
+            alpha = ec.separation_factor.get(key, float("nan"))
+            if alpha is None or (isinstance(alpha, float) and math.isnan(alpha)):
+                return 0.0
+            score = _selectivity_score(alpha)
+            return score if key == f"{a}/{b}" else 1.0 - score
+        if kind[0] == "retention":
+            return _finite01(ec.retention.get(kind[1]))
+        if kind[0] == "capacity":
+            return _finite01(ec.capacity_mAh_g.get(kind[1], float("nan")) / 150.0)
+        return (_finite01(1.0 - ec.dissolved_fe_fraction)
+                if math.isfinite(ec.dissolved_fe_fraction) else 0.0)
+
+    values = {n: float(value(n)) for n in objectives}
     y = desc.isolated_yield if desc.isolated_yield is not None else 0.0
     constraints = {"isolated_yield": float(y - yield_floor)}
     return Objectives(values=values, constraints=constraints,

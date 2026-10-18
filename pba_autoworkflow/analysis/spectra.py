@@ -17,6 +17,9 @@ import numpy as np
 
 from scipy.optimize import least_squares
 
+from ..composition import PBA
+from ..ions import IONS
+
 from ..schema import (
     ATOMIC_WEIGHT,
     CompositionDescriptors,
@@ -33,7 +36,10 @@ SURFACE_NA_CORRECTION = 0.035
 
 
 def analyze_icp(icp: ICPResult, params: SynthesisParameters) -> CompositionDescriptors:
-    """Convert digest concentrations to Na_n M[Fe(CN)6]_(1-x) . zH2O stoichiometry.
+    """Convert digest concentrations to A_x M[Fe(CN)6]_(1-y) . zH2O stoichiometry.
+
+    Every ICP-assayable ion of :data:`pba_autoworkflow.ions.IONS` present in the
+    digest (other than the framework metal itself) is put on the A site.
 
     Water content is obtained by mass balance: whatever dry mass the balance saw
     that the framework cations and cyanide cannot account for is assigned to
@@ -43,8 +49,8 @@ def analyze_icp(icp: ICPResult, params: SynthesisParameters) -> CompositionDescr
     vol_L = icp.digest_volume_mL * 1e-3
     metal = params.metal
 
-    n_na = conc.get("Na", 0.0) * vol_L
-    n_k = conc.get("K", 0.0) * vol_L
+    n_a = {s: conc[s] * vol_L for s, i in IONS.items()
+           if i.icp_assayable and s != metal and s in conc}
 
     # Hexacyanoferrate content from CHN carbon: six C per intact [Fe(CN)6].  This
     # is the measurement that resolves the C-site sublattice; it is used in
@@ -86,32 +92,24 @@ def analyze_icp(icp: ICPResult, params: SynthesisParameters) -> CompositionDescr
     # vacancy-free sample assays above Fe/M = 1 half the time, and flattening
     # those to exactly 0.000 would erase the ordering the optimizer needs.
     vacancy = float(np.clip(1.0 - fe_per_metal, -0.15, 0.9))
-    na_raw = n_na / n_metal
-    na_per_fu = float(np.clip(na_raw / (1.0 + SURFACE_NA_CORRECTION), 0.0, 2.0))
-    k_per_fu = float(np.clip((n_k / n_metal) / (1.0 + SURFACE_NA_CORRECTION), 0.0, 2.0))
+    # The residual surface salt left by washing is corrected for every A ion.
+    a_site = {s: float(np.clip((n / n_metal) / (1.0 + SURFACE_NA_CORRECTION), 0.0, 2.0))
+              for s, n in n_a.items()}
+    a_site.setdefault("Na", 0.0)
+    na_per_fu, k_per_fu = a_site["Na"], a_site.get("K", 0.0)
     cn_deficit = float("nan")
     if metal != "Fe" and n_hcf_carbon is not None and conc.get("Fe", 0.0) > 0:
         cn_deficit = float(6.0 * (conc["Fe"] * vol_L - n_hcf_carbon) / n_metal)
 
     # Water by mass balance on the digested aliquot.
-    hcf_mass = ATOMIC_WEIGHT["Fe"] + 6 * (ATOMIC_WEIGHT["C"] + ATOMIC_WEIGHT["N"])
-    anhydrous_fw = (
-        na_per_fu * ATOMIC_WEIGHT["Na"]
-        + k_per_fu * ATOMIC_WEIGHT["K"]
-        + ATOMIC_WEIGHT[metal]
-        + (1.0 - vacancy) * hcf_mass
-    )
+    anhydrous_fw = PBA.anhydrous_weight(metal, a_site, vacancy)
     measured_fw = (icp.digest_mass_mg * 1e-3) / n_metal if n_metal > 0 else 0.0
     water_mass = max(0.0, measured_fw - anhydrous_fw)
     water_per_fu = float(np.clip(
         water_mass / (2 * ATOMIC_WEIGHT["H"] + ATOMIC_WEIGHT["O"]), 0.0, 8.0
     ))
 
-    k_txt = f"K{k_per_fu:.2f}" if k_per_fu > 0.005 else ""
-    formula = (
-        f"Na{na_per_fu:.2f}{k_txt}{metal}[Fe(CN)6]{1 - vacancy:.2f}"
-        f"·{water_per_fu:.1f}H2O"
-    )
+    formula = PBA.formula(metal, a_site, vacancy, water_per_fu)
     return CompositionDescriptors(
         na_per_fu=na_per_fu,
         fe_per_metal=float(fe_per_metal),
@@ -120,6 +118,7 @@ def analyze_icp(icp: ICPResult, params: SynthesisParameters) -> CompositionDescr
         formula=formula,
         k_per_fu=k_per_fu,
         cn_deficit_per_fu=cn_deficit,
+        a_site=a_site,
     )
 
 
@@ -134,7 +133,7 @@ def estimate_capacity_mAh_g(comp: CompositionDescriptors, domain_size_nm: float,
     loss of long-range order.
     """
     q_theo = theoretical_capacity_mAh_g(
-        metal, comp.na_per_fu, comp.vacancy_fraction, comp.water_per_fu, comp.k_per_fu
+        metal, comp.na_per_fu, comp.vacancy_fraction, comp.water_per_fu, a_site=comp.a_site
     )
     if not math.isfinite(domain_size_nm) or domain_size_nm <= 0:
         return float("nan")
@@ -198,4 +197,4 @@ def charge_balance_residual(comp: CompositionDescriptors, fe2_fraction: float) -
     """
     if not (math.isfinite(fe2_fraction) and math.isfinite(comp.vacancy_fraction)):
         return float("nan")
-    return float(comp.a_per_fu - charge_balanced_a(comp.vacancy_fraction, fe2_fraction))
+    return float(comp.a_charge_per_fu - charge_balanced_a(comp.vacancy_fraction, fe2_fraction))

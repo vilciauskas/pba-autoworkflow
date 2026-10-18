@@ -39,6 +39,7 @@ import numpy as np
 from .analysis.objectives import (
     DEFAULT_TARGET_PHASE,
     OBJECTIVE_CATALOGUE,
+    is_echem,
     OBJECTIVE_NAMES,
     echem_plan,
     scalarize,
@@ -68,6 +69,11 @@ class CampaignConfig:
     #: (target_phase_fraction, crystallinity).  Electrochemical objectives add
     #: the cycling and competitive-insertion stage to every run.
     objectives: tuple[str, ...] | None = None
+    #: surrogate correlates metals (and precursors) by physical descriptors
+    #: rather than treating them as exchangeable labels.  Off by default: on
+    #: the simulator it gave +0.01 hypervolume over 8 paired seeds, within
+    #: seed-to-seed scatter (docs/guide/03-concepts.md, Planners).
+    use_descriptors: bool = False
     planner: str = "bayes"
     seed_planner: str = "sobol"
     n_seed: int = 12
@@ -144,7 +150,8 @@ class Campaign:
         self.workflow = ExperimentWorkflow(platform, store, self.workflow_config,
                                            station_pool=self.pool)
 
-        extra = ({"objective_names": self.objective_names}
+        extra = ({"objective_names": self.objective_names,
+                  "use_descriptors": self.config.use_descriptors}
                  if self.config.planner in ("bayes", "qnehvi") else {})
         self.planner = planner or make_planner(
             self.config.planner, self.space, seed=self.config.seed, **extra
@@ -215,7 +222,7 @@ class Campaign:
         single, mixed = echem_plan(names)
         if single or mixed:
             if self.platform.electrochem is None:
-                needs = [n for n in names if OBJECTIVE_CATALOGUE[n] == "echem"]
+                needs = [n for n in names if is_echem(n)]
                 raise ValueError(f"objectives {needs} need a potentiostat; the platform has none")
             # Keep any electrolytes the caller configured, add what the objectives need.
             wc = self.workflow_config

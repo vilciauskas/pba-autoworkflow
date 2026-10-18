@@ -204,10 +204,11 @@ characteristic silent failure of an automated platform.
 Objectives (default, phase formation from powder XRD): maximize `target_phase_fraction`
 (weight fraction of the campaign's target phase from whole-pattern phase quantification)
 and `crystallinity`, subject to isolated yield ≥ 0.35. A campaign can choose others with
-`--objectives`: `k_zn_selectivity`, `na_zn_selectivity`, `k_na_selectivity`,
-`zn_tolerance`, `zn_retention`, `zn_capacity`, `framework_stability` (from cycling in
-single-ion and mixed electrolytes, then ICP of the electrode and electrolyte). ICP
-composition (Na, K), IR Fe(II) share, the charge-balance residual and the drying-rate
+`--objectives`, for any ions of the ion table (Li⁺, Na⁺, K⁺, NH₄⁺, Mg²⁺, Ca²⁺, Zn²⁺,
+Al³⁺): `<a>_<b>_selectivity` (e.g. `k_zn_selectivity`, `li_na_selectivity`),
+`<a>_retention`, `<a>_capacity`, `framework_stability`, and `zn_tolerance` (from cycling in
+single-ion and mixed electrolytes, then ICP of the electrode and electrolyte; optionally
+only for samples that pass an XRD gate). ICP composition (any A-site ion), IR Fe(II) share, the charge-balance residual and the drying-rate
 index are recorded for every run. A store recorded with different objectives is
 refused rather than mixed in; start a new campaign id.
 

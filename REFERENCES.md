@@ -67,6 +67,11 @@ the project logo are credited in [`docs/logo/README.md`](docs/logo/README.md), n
 - **Drying-selected phase of zinc hexacyanoferrate (drying model, paper routes used for validation)** — Pilipavicius, Skarnulyte, Gece, Vilciauskas. Control of the Zinc Insertion Pathways in Zinc Hexacyanoferrate by Drying-Selected Phase and Structural Disorder. Manuscript.
 - **Spearman rank correlation (force-field validation)** — Spearman (1904). The Proof and Measurement of Association between Two Things. *The American Journal of Psychology* **15**, 72. https://doi.org/10.2307/1412159
 
+## Ion and metal properties (`pba_autoworkflow/ions.py`)
+
+- **Effective ionic radii** — Shannon (1976). Revised effective ionic radii and systematic studies of interatomic distances in halides and chalcogenides. *Acta Crystallographica Section A* **32**, 751-767. https://doi.org/10.1107/S0567739476001551
+- **Gibbs energies of hydration of ions** — Marcus (1991). Thermodynamics of solvation of ions. Part 5.—Gibbs free energy of hydration at 298.15 K. *J. Chem. Soc., Faraday Trans.* **87**, 2995-2999. https://doi.org/10.1039/FT9918702995
+
 ## Reference crystal structures (`pba_autoworkflow/data/phases`)
 
 Taken from the Crystallography Open Database (COD; Gražulis *et al.* (2012). Crystallography Open Database (COD): an open-access collection of crystal structures and platform for world-wide collaboration. *Nucleic Acids Research* **40**, D420-D427. https://doi.org/10.1093/nar/gkr900). COD data are in the public domain.

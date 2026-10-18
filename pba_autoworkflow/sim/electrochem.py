@@ -24,28 +24,53 @@ import math
 
 import numpy as np
 
+from ..ions import IONS, ion
 from ..schema import FARADAY_C_PER_MOL, formula_weight
 from .ground_truth import LatentState
 
 RT_F = 8.314462618 * 298.15 / FARADAY_C_PER_MOL
-CHARGE = {"Zn": 2, "Na": 1, "K": 1}
+CHARGE = {sym: i.charge for sym, i in IONS.items()}
 
-#: formal potentials (V vs Zn2+/Zn) per phase class and ion
+#: formal potentials (V vs Zn2+/Zn) per phase class for the anchor ions
 _E0 = {
     "r3c": {"Zn": 1.70, "Na": 1.80, "K": 1.92},
     "cubic_zn": {"Zn": 1.66, "Na": 1.76, "K": 1.88},
     "dc": {"Zn": 1.68, "Na": 1.75, "K": 1.85},
     "pba": {"Zn": 1.70, "Na": 1.85, "K": 1.95},
 }
+#: other multivalent ions: shift from Zn per kJ/mol of hydration Gibbs energy
+#: per charge (less negative = easier desolvation = higher potential)
+_HYDRATION_SLOPE_V = 0.0004
 _METAL_SHIFT = {"Mn": 0.05, "Fe": -0.05, "Co": 0.0, "Ni": 0.02, "Cu": 0.04, "Zn": 0.0}
 #: curve width (V): small = two-phase plateau, large = solid solution
 _WIDTH = {"r3c": 0.006, "p21n": 0.008, "cubic_zn": 0.045, "dc": 0.06, "pba": 0.04}
 #: share of the Fe sites each ion reaches
 _UTIL = {"Zn": {"r3c": 0.75, "cubic_zn": 0.6, "dc": 0.55, "pba": 0.5, "p21n": 0.5},
-         "Na": 0.85, "K": 0.9}
+         "Na": 0.85, "K": 0.9, "Li": 0.8, "NH4": 0.88, "Mg": 0.55, "Ca": 0.6, "Al": 0.4}
 #: capacity fade per cycle
 _FADE = {"Zn": {"r3c": 0.0070, "cubic_zn": 0.0040, "dc": 0.0032, "pba": 0.0050, "p21n": 0.0050},
-         "Na": 0.0015, "K": 0.0012}
+         "Na": 0.0015, "K": 0.0012, "Li": 0.0020, "NH4": 0.0012, "Mg": 0.0040, "Ca": 0.0040,
+         "Al": 0.0080}
+
+
+def _base_potential(cls: str, sym: str) -> float:
+    """Formal potential of ``sym`` in phase class ``cls`` before metal shifts.
+
+    Anchors (Zn, Na, K) from the table.  Other monovalent ions on the line
+    through Na and K in Shannon radius (larger ion, higher potential: K > Na >
+    Li); other multivalent ions offset from Zn by their hydration Gibbs energy
+    per unit charge.  Illustrative, not fitted.
+    """
+    t = _E0.get(cls, _E0["pba"])
+    if sym in t:
+        return t[sym]
+    i = ion(sym)
+    if i.charge == 1:
+        na, k = IONS["Na"], IONS["K"]
+        slope = (t["K"] - t["Na"]) / (k.radius_A - na.radius_A)
+        return t["Na"] + slope * (i.radius_A - na.radius_A)
+    zn = IONS["Zn"]
+    return t["Zn"] + _HYDRATION_SLOPE_V * (i.hydration_per_charge_kJ - zn.hydration_per_charge_kJ)
 
 
 def _classes(latent: LatentState) -> list[tuple[str, float]]:
@@ -68,19 +93,19 @@ def _classes(latent: LatentState) -> list[tuple[str, float]]:
     return [(c, w) for c, w in out if w > 1e-4]
 
 
-def formal_potential(cls: str, ion: str, metal: str, offsets: dict[str, float]) -> float:
-    base = _E0.get(cls, _E0["pba"]) if cls != "p21n" else _E0["pba"]
-    return base[ion] + (_METAL_SHIFT.get(metal, 0.0) if cls in ("pba", "p21n") else 0.0) \
-        + offsets.get(ion, 0.0)
+def formal_potential(cls: str, sym: str, metal: str, offsets: dict[str, float]) -> float:
+    base = _base_potential("pba" if cls == "p21n" else cls, sym)
+    return base + (_METAL_SHIFT.get(metal, 0.0) if cls in ("pba", "p21n") else 0.0) \
+        + offsets.get(sym, 0.0)
 
 
-def _util(ion: str, cls: str) -> float:
-    u = _UTIL[ion]
+def _util(sym: str, cls: str) -> float:
+    u = _UTIL.get(sym, 0.85 if CHARGE[sym] == 1 else 0.5)
     return u.get(cls, 0.5) if isinstance(u, dict) else u
 
 
-def _fade(ion: str, cls: str) -> float:
-    f = _FADE[ion]
+def _fade(sym: str, cls: str) -> float:
+    f = _FADE.get(sym, 0.0015 if CHARGE[sym] == 1 else 0.005)
     return f.get(cls, 0.005) if isinstance(f, dict) else f
 
 
@@ -157,8 +182,13 @@ def simulate_cycling(latent: LatentState, electrolyte_M: dict[str, float],
             inserted[ion] = inserted.get(ion, 0.0) + (1.0 - latent.vacancy_fraction) * sites \
                 * math.exp(-fade * (n_cycles - 1)) * chi / CHARGE[ion]
     cations = {i: c for i, c in electrolyte_M.items() if c > 0}
-    x_k = cations.get("K", 0.0) / sum(cations.values())
+    # Zinc frameworks dissolve when a strongly bound monovalent ion (K+, NH4+)
+    # dominates the electrolyte (soluble A3[Fe(CN)6]); the acidic electrolyte
+    # an Al3+ salt needs attacks every framework a little.
+    x_k = (cations.get("K", 0.0) + cations.get("NH4", 0.0)) / sum(cations.values())
     per_cycle = (0.0004 + 0.01 / (1.0 + math.exp(-(x_k - 0.7) / 0.05))) if metal == "Zn" else 0.0002
+    if "Al" in cations:
+        per_cycle += 0.002
     dissolved = float(min(1.0, per_cycle * n_cycles * (1.0 + rng.normal(0.0, 0.05))))
     return dict(charge_q=chg_q, charge_E=chg_E, discharge_q=dis_q, discharge_E=dis_E,
                 inserted=inserted, dissolved_fe_fraction=dissolved, formula_weight=fw)

@@ -15,6 +15,15 @@ categorical block.  The exchangeable form shares information across metals --
 which is what makes a five-metal campaign tractable in a few dozen runs -- while
 still letting each metal keep its own offset through the learned correlation.
 
+Categorical blocks that carry physical descriptors (ionic radius,
+electronegativity, ... -- ``CategoricalSpec.descriptors``) use a smoother
+form: the correlation between two levels is
+``rho + (1 - rho) exp(-|d_i - d_j|^2 / 2 l^2)`` over their standardised
+descriptor vectors, with ``l`` learned.  Levels that are physically alike are
+then correlated more strongly than levels that are not, which is what lets a
+result on Co inform the prediction for Ni, and is the route to predicting a
+level the campaign has not tried.  Identical levels still correlate fully.
+
 Hyperparameters are fitted by maximizing the exact log marginal likelihood with
 multi-start L-BFGS-B on log-transformed parameters.
 """
@@ -41,6 +50,7 @@ class GPFit:
     signal_var: float
     noise_var: float
     cat_correlation: dict[str, float] = field(default_factory=dict)
+    descriptor_lengthscales: dict[str, float] = field(default_factory=dict)
     n_train: int = 0
     converged: bool = True
 
@@ -59,9 +69,15 @@ class MixedGP:
 
     def __init__(self, n_continuous: int,
                  categorical_blocks: list[tuple[str, list[int]]] | None = None,
-                 jitter: float = 1e-8) -> None:
+                 jitter: float = 1e-8,
+                 categorical_descriptors: dict[str, np.ndarray] | None = None) -> None:
         self.n_continuous = int(n_continuous)
         self.categorical_blocks = categorical_blocks or []
+        #: block name -> (n_levels x n_features) standardised descriptors
+        self.descriptors = {k: np.asarray(v, float) for k, v in (categorical_descriptors or {}).items()
+                            if k in {n for n, _ in self.categorical_blocks}}
+        self._desc_names = [n for n, _ in self.categorical_blocks if n in self.descriptors]
+        self.desc_lengthscale = {n: 1.0 for n in self._desc_names}
         self.jitter = float(jitter)
         self._fitted = False
 
@@ -76,7 +92,9 @@ class MixedGP:
     # ------------------------------------------------------------------ #
 
     def _kernel(self, X1: np.ndarray, X2: np.ndarray, lengthscales: np.ndarray,
-                signal_var: float, cat_rho: dict[str, float]) -> np.ndarray:
+                signal_var: float, cat_rho: dict[str, float],
+                desc_ls: dict[str, float] | None = None) -> np.ndarray:
+        desc_ls = self.desc_lengthscale if desc_ls is None else desc_ls
         nc = self.n_continuous
         if nc > 0:
             d = cdist(X1[:, :nc] / lengthscales, X2[:, :nc] / lengthscales)
@@ -84,14 +102,23 @@ class MixedGP:
         else:
             K = np.ones((X1.shape[0], X2.shape[0]))
         for name, cols in self.categorical_blocks:
-            same = X1[:, cols] @ X2[:, cols].T  # 1 if same level, else 0
             rho = cat_rho[name]
-            K = K * (rho + (1.0 - rho) * same)
+            if name in self.descriptors:
+                D = self.descriptors[name]
+                d = cdist(X1[:, cols] @ D, X2[:, cols] @ D, "sqeuclidean")
+                sim = np.exp(-0.5 * d / desc_ls[name] ** 2)
+            else:
+                sim = X1[:, cols] @ X2[:, cols].T  # 1 if same level, else 0
+            K = K * (rho + (1.0 - rho) * sim)
         return signal_var * K
 
     # ------------------------------------------------------------------ #
     # Fitting
     # ------------------------------------------------------------------ #
+
+    def _unpack_desc(self, theta: np.ndarray) -> dict[str, float]:
+        off = self.n_continuous + 2 + len(self.categorical_blocks)
+        return {n: float(np.exp(theta[off + i])) for i, n in enumerate(self._desc_names)}
 
     def _unpack(self, theta: np.ndarray) -> tuple[np.ndarray, float, float, dict[str, float]]:
         nc = self.n_continuous
@@ -106,8 +133,9 @@ class MixedGP:
 
     def _nll(self, theta: np.ndarray, X: np.ndarray, y: np.ndarray) -> float:
         ls, sv, nv, rho = self._unpack(theta)
+        dls = self._unpack_desc(theta)
         n = X.shape[0]
-        K = self._kernel(X, X, ls, sv, rho)
+        K = self._kernel(X, X, ls, sv, rho, dls)
         K[np.diag_indices_from(K)] += nv + self.jitter
         try:
             c, lower = cho_factor(K, lower=True)
@@ -120,6 +148,8 @@ class MixedGP:
         # in the small-n regime that dominates the first half of a campaign.
         nll += 0.5 * float(np.sum((np.log(ls) - np.log(0.35)) ** 2) / 1.5 ** 2)
         nll += 0.5 * ((np.log(nv) - np.log(0.02)) ** 2) / 1.5 ** 2
+        # descriptor lengthscales: weakly towards ~1.5 standardised units
+        nll += 0.5 * sum((np.log(v) - np.log(1.5)) ** 2 for v in dls.values()) / 1.0 ** 2
         return nll if np.isfinite(nll) else 1e12
 
     def fit(self, X: np.ndarray, y: np.ndarray, n_restarts: int = 6,
@@ -138,15 +168,17 @@ class MixedGP:
         y_s = (y - self.y_mean) / self.y_std
 
         nc = self.n_continuous
-        n_theta = nc + 2 + len(self.categorical_blocks)
+        nd = len(self._desc_names)
+        n_theta = nc + 2 + len(self.categorical_blocks) + nd
         bounds = (
             [(np.log(0.03), np.log(8.0))] * nc
             + [(np.log(1e-3), np.log(50.0)), (np.log(1e-6), np.log(2.0))]
             + [(-4.0, 4.0)] * len(self.categorical_blocks)
+            + [(np.log(0.2), np.log(10.0))] * nd
         )
         starts = [np.concatenate([
             np.full(nc, np.log(0.4)), [np.log(1.0), np.log(0.02)],
-            np.zeros(len(self.categorical_blocks)),
+            np.zeros(len(self.categorical_blocks)), np.full(nd, np.log(1.5)),
         ])]
         for _ in range(max(0, n_restarts - 1)):
             starts.append(np.array([rng.uniform(lo, hi) for lo, hi in bounds]))
@@ -163,6 +195,7 @@ class MixedGP:
 
         nll, theta, ok = best
         self.lengthscales, self.signal_var, self.noise_var, self.cat_rho = self._unpack(theta)
+        self.desc_lengthscale = self._unpack_desc(theta)
         K = self._kernel(X, X, self.lengthscales, self.signal_var, self.cat_rho)
         K[np.diag_indices_from(K)] += self.noise_var + self.jitter
         self._chol = cho_factor(K, lower=True)
@@ -176,6 +209,7 @@ class MixedGP:
             signal_var=self.signal_var,
             noise_var=self.noise_var,
             cat_correlation=dict(self.cat_rho),
+            descriptor_lengthscales=dict(self.desc_lengthscale),
             n_train=X.shape[0],
             converged=ok,
         )

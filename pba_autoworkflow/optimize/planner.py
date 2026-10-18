@@ -213,8 +213,11 @@ class BayesPlanner(Planner):
                  n_mc_samples: int = 96, min_train: int = 8,
                  objective_names: tuple[str, ...] = OBJECTIVE_NAMES,
                  constraint_names: tuple[str, ...] = ("isolated_yield",),
-                 local_fraction: float = 0.4) -> None:
+                 local_fraction: float = 0.4, use_descriptors: bool = False) -> None:
         super().__init__(space, seed)
+        #: correlate categorical levels by their physical descriptors where the
+        #: design space provides them (False: exchangeable levels, as before)
+        self.use_descriptors = bool(use_descriptors)
         self.n_candidates = int(n_candidates)
         self.n_mc_samples = int(n_mc_samples)
         self.min_train = int(min_train)
@@ -294,17 +297,18 @@ class BayesPlanner(Planner):
 
         nc = len(self.space.continuous)
         blocks = self.space.categorical_blocks()
+        desc = self.space.categorical_descriptors() if self.use_descriptors else {}
         obj_models: list[MixedGP] = []
         diag: dict[str, dict[str, float]] = {}
         for j, name in enumerate(self.objective_names):
-            gp = MixedGP(nc, blocks)
+            gp = MixedGP(nc, blocks, categorical_descriptors=desc)
             gp.fit(X_train, Y_obj[:, j], rng=self.rng)
             obj_models.append(gp)
             diag[name] = gp.loo_diagnostics()
 
         con_models: list[MixedGP] = []
         for j, name in enumerate(self.constraint_names):
-            gp = MixedGP(nc, blocks)
+            gp = MixedGP(nc, blocks, categorical_descriptors=desc)
             gp.fit(X_train, Y_con[:, j], rng=self.rng)
             con_models.append(gp)
             diag[f"constraint::{name}"] = gp.loo_diagnostics()

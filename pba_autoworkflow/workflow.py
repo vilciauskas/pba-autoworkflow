@@ -23,6 +23,8 @@ from dataclasses import dataclass, field
 from typing import Awaitable, Callable, TypeVar
 
 from .analysis.echem import build_echem_descriptors
+from .ions import electrolyte_recipe
+from .ions import ion as ion_info
 from .analysis.objectives import OBJECTIVE_NAMES, compute_objectives, quality_flags
 from .analysis.spectra import (
     analyze_icp,
@@ -75,6 +77,13 @@ class WorkflowConfig:
     echem_mixed_electrolytes: tuple[dict, ...] = ()
     echem_current_mA_g: float = 100.0
     echem_n_cycles: int = 20
+    #: run electrochemistry only on samples whose XRD passes these thresholds,
+    #: e.g. ``{"target_phase_fraction": 0.5, "crystallinity": 0.25}`` (cycling
+    #: takes days on real hardware).  Gated samples score 0 on electrochemical
+    #: objectives, which hides borderline samples from the optimiser: in the
+    #: guide's zn-tol campaign it skipped the only two zinc samples with any
+    #: Zn tolerance and the campaign never returned to zinc.  Off by default.
+    echem_gate: dict[str, float] | None = None
     max_transport_retries: int = 2
     retry_backoff_s: float = 1.0
 
@@ -326,9 +335,16 @@ class ExperimentWorkflow:
                 desc.composition, desc.ir.fe2_fraction)
 
         if cfg.echem_single_ions or cfg.echem_mixed_electrolytes:
-            # Errors here are terminal for the run: an electrochemical objective
-            # without its measurement would be scored as the worst value.
-            desc.echem = await self._electrochemistry(exp, solid, desc, trace)
+            gate = self._echem_gate(desc)
+            if gate:
+                exp.metadata["echem_skipped"] = gate
+                self.store.log_event("echem_gated", payload={"reason": gate},
+                                     campaign_id=exp.campaign_id,
+                                     experiment_id=exp.experiment_id)
+            else:
+                # Errors here are terminal for the run: an electrochemical objective
+                # without its measurement would be scored as the worst value.
+                desc.echem = await self._electrochemistry(exp, solid, desc, trace)
 
         # Isolated yield from the weighed mass against the measured formula.
         mass = exp.metadata.get("dry_mass_mg")
@@ -341,7 +357,7 @@ class ExperimentWorkflow:
             fw = formula_weight(p.metal, desc.composition.na_per_fu,
                                 desc.composition.vacancy_fraction,
                                 desc.composition.water_per_fu,
-                                desc.composition.k_per_fu)
+                                a_site=desc.composition.a_site)
             theo_mg = limiting_mol * fw * 1e3
             if theo_mg > 0:
                 desc.isolated_yield = min(float(mass / theo_mg), 1.2)
@@ -352,6 +368,21 @@ class ExperimentWorkflow:
                 desc.xrd.crystallinity_index, exp.parameters.metal,
             )
         return desc
+
+    def _echem_gate(self, desc: SampleDescriptors) -> str:
+        """Empty string if the sample should be cycled, else the reason not."""
+        gate = self.config.echem_gate
+        if not gate:
+            return ""
+        from .analysis.objectives import target_phase_fraction
+        tpf = target_phase_fraction(desc, self.config.target_phase)
+        cr = desc.xrd.crystallinity_index if desc.xrd is not None else 0.0
+        out = []
+        if tpf < gate.get("target_phase_fraction", 0.0):
+            out.append(f"target phase fraction {tpf:.2f} < {gate['target_phase_fraction']:g}")
+        if cr < gate.get("crystallinity", 0.0):
+            out.append(f"crystallinity {cr:.2f} < {gate['crystallinity']:g}")
+        return "; ".join(out)
 
     async def _electrochemistry(self, exp: Experiment, solid: VesselHandle,
                                 desc: SampleDescriptors, trace: WorkflowTrace):
@@ -375,6 +406,11 @@ class ExperimentWorkflow:
         mixed = []
         for el in cfg.echem_mixed_electrolytes:
             tag = "+".join(f"{k}{v:g}" for k, v in sorted(el.items()))
+            rec = electrolyte_recipe(el)
+            self.store.log_event("electrolyte", payload={
+                "cations_M": rec.cations_M, "anion": rec.anion, "salts_M": rec.salts_M,
+                "max_pH": rec.max_pH, "notes": rec.notes},
+                campaign_id=exp.campaign_id, experiment_id=exp.experiment_id)
             async with await self._station("electrochem"):
                 t0 = tick()
                 data = await self._call(
@@ -385,7 +421,8 @@ class ExperimentWorkflow:
                     exp.experiment_id, f"echem_{tag}", ec.device_id, data.as_arrays(),
                     {"electrolyte_M": dict(el)})
                 trace.add(f"echem_{tag}", True, t0)
-            elements = tuple(sorted(set(el) | {"Fe", exp.parameters.metal}))
+            assayable = {i for i in el if ion_info(i).icp_assayable}
+            elements = tuple(sorted(assayable | {"Fe", exp.parameters.metal}))
             async with await self._station("elemental"):
                 electrode = await self._call(exp, ea.device_id, f"icp_electrode_{tag}",
                                              lambda: ea.measure(data.electrode, elements))
@@ -405,7 +442,7 @@ class ExperimentWorkflow:
         if c is not None:
             from .schema import formula_weight
             fw = formula_weight(exp.parameters.metal, c.na_per_fu, c.vacancy_fraction,
-                                c.water_per_fu, c.k_per_fu)
+                                c.water_per_fu, a_site=c.a_site)
         return build_echem_descriptors(single, mixed,
                                        framework_metal=exp.parameters.metal,
                                        formula_weight=fw,

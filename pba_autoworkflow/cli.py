@@ -48,6 +48,10 @@ def _add_campaign_args(ap: argparse.ArgumentParser) -> None:
                     help="comma-separated objectives (default: the campaign's recorded "
                          "ones, else target_phase_fraction,crystallinity); e.g. "
                          "target_phase_fraction,k_zn_selectivity,zn_retention")
+    ap.add_argument("--descriptors", action="store_true",
+                    help="correlate metals/precursors in the surrogate by physical "
+                         "descriptors (radius, electronegativity, ...) instead of "
+                         "treating them as unrelated labels")
     ap.add_argument("--time-scale", type=float, default=0.0,
                     help="wall-clock compression for the simulated deck "
                          "(1.0 = real durations, 0.0 = instant)")
@@ -80,6 +84,7 @@ def _build(args, campaign_id: str | None) -> tuple[Campaign, ProvenanceStore]:
         target_phase=getattr(args, "target_phase", None),
         objectives=(tuple(o.strip() for o in args.objectives.split(",") if o.strip())
                     if getattr(args, "objectives", None) else None),
+        use_descriptors=bool(getattr(args, "descriptors", False)),
     )
     platform, _ = build_simulated_platform(
         seed=args.seed, time_scale=args.time_scale,

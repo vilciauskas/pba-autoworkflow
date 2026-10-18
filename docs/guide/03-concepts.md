@@ -191,12 +191,15 @@ worst value. The default is the XRD pair; choose others with `CampaignConfig(obj
 |---|---|---|
 | `target_phase_fraction` | Weight fraction of the target phase × (1 − unidentified intensity share) | XRD |
 | `crystallinity` | XRD crystallinity index (above) | XRD |
-| `k_zn_selectivity` | 0.5 + log₁₀ α<sub>K/Zn</sub> / 8 (α = 1 → 0.5; 10⁴ → 1) | electrochemistry |
-| `zn_tolerance` | 1 − `k_zn_selectivity`: Zn²⁺ uptake despite K⁺ | electrochemistry |
-| `na_zn_selectivity`, `k_na_selectivity` | As `k_zn_selectivity` for α<sub>Na/Zn</sub>, α<sub>K/Na</sub> | electrochemistry |
-| `zn_retention` | Discharge capacity retention in Zn²⁺ electrolyte | electrochemistry |
-| `zn_capacity` | Second-cycle Zn²⁺ discharge capacity / 150 mAh g⁻¹ | electrochemistry |
-| `framework_stability` | 1 − fraction of the electrode's Fe found in the mixed electrolyte | electrochemistry |
+| `<a>_<b>_selectivity` | 0.5 + log₁₀ α<sub>a/b</sub> / 8 (α = 1 → 0.5; 10⁴ → 1; 10⁻⁴ → 0). `<b>_<a>_selectivity` is 1 minus it | electrochemistry |
+| `<a>_retention` | Discharge capacity retention in the *a* electrolyte | electrochemistry |
+| `<a>_capacity` | Second-cycle discharge capacity in *a* / 150 mAh g⁻¹ | electrochemistry |
+| `framework_stability` | 1 − fraction of the electrode's Fe found in the mixed electrolyte(s) | electrochemistry |
+| `zn_tolerance` | Alias of `zn_k_selectivity`: Zn²⁺ uptake despite K⁺ | electrochemistry |
+
+*a* and *b* are any ions of the ion table, written in lower case: `li`, `na`, `k`, `nh4`, `mg`,
+`ca`, `zn`, `al`. Examples: `k_zn_selectivity`, `li_na_selectivity`, `mg_retention`,
+`nh4_capacity`. `analysis.objectives.objective_catalogue()` lists every valid name.
 
 A missing measurement scores 0. The ICP composition, IR and charge balance are recorded for every
 run but not optimised.
@@ -208,25 +211,66 @@ maps the **Pareto front**: the recipes that cannot be improved in one objective 
 another. Progress is measured by the **dominated hypervolume** of the feasible results, with the
 origin as the reference point. The report's objective-space panel shows the first two objectives.
 
+## Ions
+
+Everything ion-specific comes from one table, `pba_autoworkflow/ions.py`. Adding an ion means
+adding one entry there; objective names, electrolytes, assays and pair keys follow from it.
+
+| Ion | *z* | *r* (Å) | Δ<sub>hyd</sub>*G*° (kJ mol⁻¹) | Δ<sub>hyd</sub>*G*°/*z* | ICP | Notes |
+|---|---|---|---|---|---|---|
+| Li⁺ | 1 | 0.76 | −475 | −475 | yes | |
+| Na⁺ | 1 | 1.02 | −365 | −365 | yes | |
+| K⁺ | 1 | 1.38 | −295 | −295 | yes | K₂SO₄ ≤ 1.28 M |
+| NH₄⁺ | 1 | 1.48 | −285 | −285 | **no** | taken by coulometry |
+| Mg²⁺ | 2 | 0.72 | −1830 | −915 | yes | |
+| Ca²⁺ | 2 | 1.00 | −1505 | −753 | yes | CaSO₄ insoluble: nitrate electrolyte |
+| Zn²⁺ | 2 | 0.74 | −1955 | −978 | yes | pH < 6 |
+| Al³⁺ | 3 | 0.535 | −4525 | −1508 | yes | pH < 3.5 |
+
+Radii are Shannon (1976) six-coordinate values (NH₄⁺: Marcus 1991); hydration Gibbs energies are
+the experimental values of Marcus (1991), Table 1.
+
 ## Electrochemistry and ion selectivity
 
-Choosing any electrochemical objective adds a stage to every run. For each ion it needs, a fresh
+Choosing any electrochemical objective adds a stage to the run. For each ion it needs, a fresh
 electrode is cast from the powder and cycled (charge first, ending on a discharge) in a 1 mol/L
 single-ion electrolyte. For each ion pair, another electrode is cycled in a **mixed electrolyte**,
 then digested and assayed, and the spent electrolyte is assayed for Fe.
 
-| Objective(s) | Single-ion electrolytes | Mixed electrolyte |
-|---|---|---|
-| `k_zn_selectivity`, `zn_tolerance` | Zn²⁺, K⁺ | 1 M Zn²⁺ + 5 mM K⁺ |
-| `na_zn_selectivity` | Zn²⁺, Na⁺ | 1 M Zn²⁺ + 20 mM Na⁺ |
-| `k_na_selectivity` | Na⁺, K⁺ | 1 M Na⁺ + 10 mM K⁺ |
-| `zn_retention`, `zn_capacity` | Zn²⁺ | — |
-| `framework_stability` | — | 1 M Zn²⁺ + 5 mM K⁺ |
+**XRD gate (optional).** Cycling takes days on real hardware. With
+`WorkflowConfig(echem_gate={"target_phase_fraction": 0.5, "crystallinity": 0.25})`, only samples
+whose XRD passes the thresholds are cycled. A gated sample keeps its XRD objectives, scores 0 on
+the electrochemical ones, and records the reason in `metadata["echem_skipped"]`.
 
-The minor ions are dilute on purpose. With a formal-potential gap of 0.1–0.25 V, K⁺ at 0.1 M
-against 1 M Zn²⁺ carries more than 99 % of the charge, and the Zn²⁺ uptake disappears into the
-measurement error. Override the electrolytes with `WorkflowConfig(echem_single_ions=…,
+The gate is off by default because a score of 0 hides borderline samples from the optimiser. With
+these thresholds, the step-7 campaign of chapter 2 skipped its only two zinc samples (cubic
+fractions 0.30 and 0.49), the only runs with any Zn²⁺ tolerance. The optimiser then never
+returned to zinc (2 of 29 completed runs), and the hypervolume stayed at 0. Use the gate when
+cycling time dominates and the objectives do not depend on borderline samples. Set the thresholds
+below the phase purity of the samples you expect to matter.
+
+**Mixed electrolytes.** The ion expected to be taken up preferentially is made dilute against
+1 mol/L of the other. Without that, it carries almost all the charge (K⁺ at 0.1 M against 1 M
+Zn²⁺ carries more than 99 %), and the other ion's uptake disappears into the measurement error.
+The prior guess of which ion is preferred is the less negative Δ<sub>hyd</sub>*G*°/*z* (easier
+desolvation per unit charge, the ordering behind the reported PBA sequence K⁺ > Na⁺ > divalent
+ions). The minor ion is 10 mM against an ion of the same charge and 5 mM otherwise. Three pairs
+are tuned on the simulator and keep their earlier values:
+
+| Pair | Mixed electrolyte |
+|---|---|
+| K⁺/Zn²⁺ | 1 M Zn²⁺ + 5 mM K⁺ |
+| Na⁺/Zn²⁺ | 1 M Zn²⁺ + 20 mM Na⁺ |
+| K⁺/Na⁺ | 1 M Na⁺ + 10 mM K⁺ |
+
+`ions.electrolyte_recipe()` turns cation concentrations into salts: sulfates, unless one cation
+would exceed its sulfate solubility (then nitrates for all). It also records the lowest hydrolysis
+pH limit of the cations (Zn²⁺ < 6, Al³⁺ < 3.5). Each cell's recipe is written to the event log as
+an `electrolyte` event. Override the electrolytes with `WorkflowConfig(echem_single_ions=…,
 echem_mixed_electrolytes=…)`.
+
+**Separation-factor keys** are written lower charge first, then the more weakly hydrated ion:
+`K/Zn`, `Na/Zn`, `K/Na`, `Na/Li`, `Li/Mg`.
 
 From the curves (`analysis/echem.py`):
 
@@ -241,11 +285,17 @@ From the mixed-electrolyte electrode:
 - **Separation factor** α<sub>A/B</sub> = (*x*<sub>A</sub>/*x*<sub>B</sub>)<sub>solid</sub> /
   (*c*<sub>A</sub>/*c*<sub>B</sub>)<sub>electrolyte</sub>, from the inserted amounts per Fe. Concentrations
   stand in for activities, so use matched ionic strength.
-- **The framework's own metal cannot be assayed as inserted.** In zinc hexacyanoferrate from the
-  K/Zn mixed electrolyte, the inserted Zn²⁺ is about 0.01 (R-3c) to 0.05 (disordered cubic) per
-  formula unit, against one framework Zn: about the size of the assay error. It is obtained by
-  coulometry instead: charge passed in the final discharge minus the charge carried by the assayed
-  ions, divided by 2. This needs the active mass and the formula weight from the as-made composition.
+- **Ions that cannot be assayed directly** are obtained by coulometry: charge passed in the final
+  discharge minus the charge carried by the assayed ions, divided by the ion's charge. This needs
+  the active mass and the formula weight from the as-made composition. Two cases need it:
+  - The framework's own metal. In zinc hexacyanoferrate from the K/Zn mixed electrolyte, the
+    inserted Zn²⁺ is about 0.01 (R-3c) to 0.05 (disordered cubic) per formula unit, against one
+    framework Zn: about the size of the assay error.
+  - NH₄⁺, which ICP does not see.
+
+  Only one such ion per electrolyte can be recovered. An NH₄⁺/Zn²⁺ mixture on a zinc framework
+  gives NaN for both, so measure that pair on another framework or assay NH₄⁺ separately (CHN
+  nitrogen or ion chromatography).
 - **Predicted α** from the single-ion formal potentials. Per electron, the exchange
   A⁺ + ½ Zn(host) ⇌ A(host) + ½ Zn²⁺ gives
 
@@ -260,7 +310,13 @@ measured α<sub>K/Zn</sub> is 0.86 × the simulated true value (median; 10th–9
 the IR Fe(II) share is within 0.07 (median bias −0.01); K per formula unit from ICP is within 0.014.
 
 The simulator's electrochemistry is **illustrative**. Its formal potentials put K⁺ above Na⁺ above
-Zn²⁺, as reported for PBAs. Its K–Zn gap is smaller in disordered cubic ZnHCF than in R-3c
+Zn²⁺, as reported for PBAs. The other ions are placed by rule, not fitted:
+- other monovalent ions lie on the line through Na⁺ and K⁺ in ionic radius, giving NH₄⁺ > K⁺ >
+  Na⁺ > Li⁺;
+- other multivalent ions are offset from Zn²⁺ by 0.4 mV per kJ mol⁻¹ of Δ<sub>hyd</sub>*G*°/*z*,
+  giving Ca²⁺ > Mg²⁺ > Zn²⁺ > Al³⁺.
+
+Selectivities for those ions in the simulator are therefore consequences of these two rules. Its K–Zn gap is smaller in disordered cubic ZnHCF than in R-3c
 (α<sub>K/Zn</sub> ≈ 1.4 × 10³ against 8–9 × 10³). That encodes a **hypothesis**: that the vacancy-related
 sites of the disordered framework make it more Zn²⁺-tolerant. It has not been measured; testing it
 is what the selectivity objectives are for.
@@ -310,6 +366,27 @@ between metals. Hyperparameters, including the noise level, are fitted by maximi
 marginal likelihood. Candidates come from global Sobol' coverage plus local perturbations of the
 current front. A batch is selected greedily with the *kriging believer* heuristic. Until at least
 8 usable results exist, the planner continues with Sobol' points (logged as `sobol-warmup`).
+
+**Physical descriptors for metals (optional).** With `CampaignConfig(use_descriptors=True)` or
+`--descriptors`, the metal and precursor are no longer unrelated labels. The correlation between
+two metals becomes ρ + (1 − ρ) exp(−|*d*<sub>i</sub> − *d*<sub>j</sub>|² / 2*l*²), where *d* is
+the standardised descriptor vector of each metal and *l* is fitted:
+
+- metal: Shannon radius of M²⁺, Pauling electronegativity, Δ<sub>hyd</sub>*G*° of M²⁺, and whether
+  M³⁺/M²⁺ is accessible;
+- precursor: A-cation radius and Fe oxidation state.
+
+Similar metals are then predicted to behave similarly, which is what allows a prediction for a
+metal the campaign has not tried yet. On a synthetic test with one metal held out entirely, it
+halved the prediction error for that metal (RMSE 2.07 → 1.08).
+
+In closed-loop campaigns on the simulated deck (8 paired seeds, 12 seed runs plus 5 batches of
+8, default XRD objectives), the mean hypervolume after the last batch was 0.804 with descriptors
+against 0.792 without. It was higher after every batch, but the difference is within
+seed-to-seed scatter (paired t-test p = 0.10–0.23, except p = 0.03 after batch 3, one of five comparisons). The
+simulator's metal effects come from hand-made tables, not from the descriptors, so this test can
+neither confirm nor rule out a real benefit. For that reason the option is off by default. It
+should matter most when the campaign adds metals or ions it has little data on.
 
 **Replicates.** By default 15 % of each Bayesian batch repeats earlier recipes. Their scatter
 shows whether a hypervolume gain is real or within measurement noise; see

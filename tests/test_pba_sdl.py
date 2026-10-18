@@ -1183,7 +1183,7 @@ def test_electrochemistry_distinguishes_r3c_from_disordered_cubic():
                          parameters=_paper(**dry))
         wf = ExperimentWorkflow(platform, ProvenanceStore(tempfile.mkdtemp()), WorkflowConfig(
             target_phase="znhcf_r3c", objectives=objs, echem_single_ions=single,
-            echem_mixed_electrolytes=mixed))
+            echem_mixed_electrolytes=mixed, echem_gate=None))
         asyncio.run(wf.run(exp))
         assert exp.status is ExperimentStatus.COMPLETE, exp.error
         res[name] = exp.descriptors.echem
@@ -1205,7 +1205,7 @@ def test_objective_choice_is_validated_and_recorded(tmp_path):
                  CampaignConfig(campaign_id="o2", objectives=("crystallinity", "zn_retention")))
     c = Campaign(build_simulated_platform(seed=0, time_scale=0.0)[0], store,
                  CampaignConfig(campaign_id="o3", objectives=("crystallinity", "k_zn_selectivity")))
-    assert c.workflow_config.echem_single_ions == ("Zn", "K")
+    assert set(c.workflow_config.echem_single_ions) == {"Zn", "K"}
     assert c.planner.objective_names == ("crystallinity", "k_zn_selectivity")
     again = Campaign(build_simulated_platform(seed=0, time_scale=0.0)[0], store,
                      CampaignConfig(campaign_id="o3"))

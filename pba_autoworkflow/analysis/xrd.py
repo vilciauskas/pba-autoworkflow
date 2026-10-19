@@ -41,7 +41,7 @@ from scipy.optimize import curve_fit, least_squares
 from scipy.signal import find_peaks, savgol_filter
 
 from ..schema import XRDDescriptors, XRDPattern
-from .phases import QuantResult, quantify_phases
+from .phases import candidates, QuantResult, quantify_phases
 
 #: Instrumental FWHM (deg) used to deconvolute the observed broadening.  On a
 #: real platform this comes from a LaB6 or Si standard measured in the same
@@ -413,6 +413,14 @@ def _strongest_low_angle_line(r) -> float | None:
     return float(r.lines_tt[m][int(np.argmax(r.lines_I[m]))]) if m.any() else None
 
 
+#: Error model of framework-polymorph weight fractions against the measured
+#: crystallinity index: (crystallinity knots, sd).  RMS errors of the R-3c share
+#: in simulated cubic/R-3c ZnHCF mixtures (zn_xrd_benchmark, 1200 patterns,
+#: domains 16-25 nm); interpolated, constant outside the knots.  A model of
+#: this analysis on simulated data -- recalibrate on real reference mixtures.
+POLYMORPH_SD_KNOTS = ((0.15, 0.25, 0.35, 0.5, 0.7), (0.36, 0.16, 0.08, 0.05, 0.045))
+
+
 def _full_grid_model(quant, pattern: XRDPattern) -> np.ndarray:
     """The whole-pattern Bragg model on the pattern's own 2-theta grid."""
     tt = np.asarray(pattern.two_theta_deg, dtype=float)
@@ -457,8 +465,24 @@ def analyze_pattern(pattern: XRDPattern, metal: str | None = None,
     fractions = {}
     for r in phases:
         fractions[r.phase_id] = fractions.get(r.phase_id, 0.0) + round(r.weight_fraction, 5)
+    sd = dict(quant.absent_sd) if quant is not None else {}
+    for r in phases:
+        sd[r.phase_id] = float(math.hypot(sd.get(r.phase_id, 0.0), r.weight_fraction_sd))
+    # Systematic part for metals with competing framework polymorphs: an error
+    # model of the phase split against the measured crystallinity, calibrated
+    # on the simulated deck (POLYMORPH_SD_KNOTS).  Every framework candidate
+    # gets an uncertainty, including absent ones (0 +/- sd).
+    fw_cands = sorted({r.phase_id for r in candidates(metal) if r.framework}) if metal else []
+    if len(fw_cands) > 1:
+        c_ = float(np.clip(crystallinity, 0.0, 1.0))
+        sys_sd = float(np.interp(c_, *POLYMORPH_SD_KNOTS))
+        fw_share = sum(fractions.get(k, 0.0) for k in fw_cands) or 1.0
+        for k in fw_cands:
+            sd[k] = float(math.hypot(sd.get(k, 0.0), sys_sd * fw_share))
+    sd = {k: round(v, 5) for k, v in sd.items()}
     common = dict(
         phase_fractions=fractions,
+        phase_fraction_sd=sd,
         phase_lattice={r.phase_id: [round(v, 5) for v in r.lattice] for r in phases},
         unidentified_fraction=float(np.clip(quant.unidentified_fraction, 0, 1)) if quant else 0.0,
         n_unidentified_peaks=len(quant.unidentified_peaks) if quant else len(peaks),

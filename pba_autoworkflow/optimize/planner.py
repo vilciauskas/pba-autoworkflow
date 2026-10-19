@@ -213,11 +213,15 @@ class BayesPlanner(Planner):
                  n_mc_samples: int = 96, min_train: int = 8,
                  objective_names: tuple[str, ...] = OBJECTIVE_NAMES,
                  constraint_names: tuple[str, ...] = ("isolated_yield",),
-                 local_fraction: float = 0.4, use_descriptors: bool = False) -> None:
+                 local_fraction: float = 0.4, use_descriptors: bool = False,
+                 use_measurement_noise: bool = False) -> None:
         super().__init__(space, seed)
         #: correlate categorical levels by their physical descriptors where the
         #: design space provides them (False: exchangeable levels, as before)
         self.use_descriptors = bool(use_descriptors)
+        #: pass each observation's reported uncertainty to the surrogate
+        self.use_measurement_noise = bool(use_measurement_noise)
+        self._train_sd = np.zeros((0, 0))
         self.n_candidates = int(n_candidates)
         self.n_mc_samples = int(n_mc_samples)
         self.min_train = int(min_train)
@@ -230,7 +234,7 @@ class BayesPlanner(Planner):
     # -- training data ------------------------------------------------- #
 
     def _training_data(self, history: list[Experiment]):
-        X, Yo, Yc = [], [], []
+        X, Yo, Yc, Ys = [], [], [], []
         for exp in history:
             if exp.objectives is None:
                 continue
@@ -241,10 +245,12 @@ class BayesPlanner(Planner):
             except ValueError:
                 continue
             Yo.append([exp.objectives.values.get(n, 0.0) for n in self.objective_names])
+            Ys.append([(exp.objectives.uncertainty or {}).get(n, 0.0) for n in self.objective_names])
             Yc.append([exp.objectives.constraints.get(n, 0.0)
                        for n in self.constraint_names])
         if not X:
             return None, None, None
+        self._train_sd = np.array(Ys)
         return np.array(X), np.array(Yo), np.array(Yc)
 
     def _candidate_pool(self, X_train: np.ndarray, Y_obj: np.ndarray) -> np.ndarray:
@@ -302,7 +308,9 @@ class BayesPlanner(Planner):
         diag: dict[str, dict[str, float]] = {}
         for j, name in enumerate(self.objective_names):
             gp = MixedGP(nc, blocks, categorical_descriptors=desc)
-            gp.fit(X_train, Y_obj[:, j], rng=self.rng)
+            sd = self._train_sd[:, j] if self.use_measurement_noise else None
+            gp.fit(X_train, Y_obj[:, j], rng=self.rng,
+                   noise_sd=sd if sd is not None and np.any(sd > 0) else None)
             obj_models.append(gp)
             diag[name] = gp.loo_diagnostics()
 

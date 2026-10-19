@@ -84,6 +84,7 @@ class MixedGP:
         self.lengthscales = np.ones(self.n_continuous)
         self.signal_var = 1.0
         self.noise_var = 1e-2
+        self._extra_var: float | np.ndarray = 0.0
         self.cat_rho = {name: 0.5 for name, _ in self.categorical_blocks}
         self.fit_info: GPFit | None = None
 
@@ -136,7 +137,7 @@ class MixedGP:
         dls = self._unpack_desc(theta)
         n = X.shape[0]
         K = self._kernel(X, X, ls, sv, rho, dls)
-        K[np.diag_indices_from(K)] += nv + self.jitter
+        K[np.diag_indices_from(K)] += nv + self.jitter + self._extra_var
         try:
             c, lower = cho_factor(K, lower=True)
         except np.linalg.LinAlgError:
@@ -153,7 +154,14 @@ class MixedGP:
         return nll if np.isfinite(nll) else 1e12
 
     def fit(self, X: np.ndarray, y: np.ndarray, n_restarts: int = 6,
-            rng: np.random.Generator | None = None) -> GPFit:
+            rng: np.random.Generator | None = None,
+            noise_sd: np.ndarray | None = None) -> GPFit:
+        """Fit hyperparameters by maximum marginal likelihood.
+
+        ``noise_sd``: optional per-observation measurement uncertainty (same
+        units as ``y``).  Its variance is added to the learned homoscedastic
+        noise on the diagonal, so uncertain observations pull less on the fit.
+        """
         X = np.atleast_2d(np.asarray(X, dtype=float))
         y = np.asarray(y, dtype=float).ravel()
         if X.shape[0] != y.size:
@@ -166,6 +174,13 @@ class MixedGP:
         self.y_mean = float(np.mean(y))
         self.y_std = float(np.std(y)) or 1.0
         y_s = (y - self.y_mean) / self.y_std
+        if noise_sd is None:
+            self._extra_var = 0.0
+        else:
+            sd = np.nan_to_num(np.asarray(noise_sd, dtype=float).ravel(), nan=0.0)
+            if sd.size != y.size:
+                raise ValueError(f"noise_sd has {sd.size} entries, y has {y.size}")
+            self._extra_var = (np.clip(sd, 0.0, None) / self.y_std) ** 2
 
         nc = self.n_continuous
         nd = len(self._desc_names)
@@ -197,7 +212,7 @@ class MixedGP:
         self.lengthscales, self.signal_var, self.noise_var, self.cat_rho = self._unpack(theta)
         self.desc_lengthscale = self._unpack_desc(theta)
         K = self._kernel(X, X, self.lengthscales, self.signal_var, self.cat_rho)
-        K[np.diag_indices_from(K)] += self.noise_var + self.jitter
+        K[np.diag_indices_from(K)] += self.noise_var + self.jitter + self._extra_var
         self._chol = cho_factor(K, lower=True)
         self._alpha = cho_solve(self._chol, y_s)
         self._y_s = y_s

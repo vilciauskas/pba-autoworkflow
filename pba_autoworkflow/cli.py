@@ -52,6 +52,9 @@ def _add_campaign_args(ap: argparse.ArgumentParser) -> None:
                     help="correlate metals/precursors in the surrogate by physical "
                          "descriptors (radius, electronegativity, ...) instead of "
                          "treating them as unrelated labels")
+    ap.add_argument("--measurement-noise", action="store_true",
+                    help="give the surrogate each sample's reported XRD weight-fraction "
+                         "uncertainty as measurement noise")
     ap.add_argument("--time-scale", type=float, default=0.0,
                     help="wall-clock compression for the simulated deck "
                          "(1.0 = real durations, 0.0 = instant)")
@@ -85,6 +88,7 @@ def _build(args, campaign_id: str | None) -> tuple[Campaign, ProvenanceStore]:
         objectives=(tuple(o.strip() for o in args.objectives.split(",") if o.strip())
                     if getattr(args, "objectives", None) else None),
         use_descriptors=bool(getattr(args, "descriptors", False)),
+        use_measurement_noise=bool(getattr(args, "measurement_noise", False)),
     )
     platform, _ = build_simulated_platform(
         seed=args.seed, time_scale=args.time_scale,

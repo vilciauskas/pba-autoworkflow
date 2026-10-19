@@ -74,6 +74,11 @@ class CampaignConfig:
     #: the simulator it gave +0.01 hypervolume over 8 paired seeds, within
     #: seed-to-seed scatter (docs/guide/03-concepts.md, Planners).
     use_descriptors: bool = False
+    #: give the surrogate each observation's reported uncertainty (XRD
+    #: weight-fraction sd) as measurement noise.  Off by default: in paired
+    #: R-3c campaigns on the simulator it made no measurable difference
+    #: (docs/guide/03-concepts.md, Planners).
+    use_measurement_noise: bool = False
     planner: str = "bayes"
     seed_planner: str = "sobol"
     n_seed: int = 12
@@ -151,7 +156,8 @@ class Campaign:
                                            station_pool=self.pool)
 
         extra = ({"objective_names": self.objective_names,
-                  "use_descriptors": self.config.use_descriptors}
+                  "use_descriptors": self.config.use_descriptors,
+                  "use_measurement_noise": self.config.use_measurement_noise}
                  if self.config.planner in ("bayes", "qnehvi") else {})
         self.planner = planner or make_planner(
             self.config.planner, self.space, seed=self.config.seed, **extra

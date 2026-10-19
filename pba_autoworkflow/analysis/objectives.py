@@ -265,6 +265,17 @@ def target_phase_fraction(desc: SampleDescriptors, target_phase: str) -> float:
     return float(np.clip(w * (1.0 - x.unidentified_fraction), 0.0, 1.0))
 
 
+def target_phase_fraction_sd(desc: SampleDescriptors, target_phase: str) -> float:
+    """Standard uncertainty of :func:`target_phase_fraction` (0 if not reported)."""
+    x = desc.xrd
+    if x is None:
+        return 0.0
+    sd = (x.phase_fraction_sd or {}).get(target_phase, 0.0)
+    if sd is None or not math.isfinite(sd):
+        return 0.0
+    return float(sd * (1.0 - x.unidentified_fraction))
+
+
 def compute_objectives(desc: SampleDescriptors, params: SynthesisParameters,
                        yield_floor: float = YIELD_FLOOR,
                        target_phase: str = DEFAULT_TARGET_PHASE,
@@ -307,8 +318,13 @@ def compute_objectives(desc: SampleDescriptors, params: SynthesisParameters,
     values = {n: float(value(n)) for n in objectives}
     y = desc.isolated_yield if desc.isolated_yield is not None else 0.0
     constraints = {"isolated_yield": float(y - yield_floor)}
+    uncertainty = {}
+    if "target_phase_fraction" in objectives and desc.xrd is not None:
+        sd = target_phase_fraction_sd(desc, target_phase)
+        if sd > 0:
+            uncertainty["target_phase_fraction"] = sd
     return Objectives(values=values, constraints=constraints,
-                      feasible=constraints["isolated_yield"] >= 0.0)
+                      feasible=constraints["isolated_yield"] >= 0.0, uncertainty=uncertainty)
 
 
 def scalarize(obj: Objectives, weights: dict[str, float] | None = None,

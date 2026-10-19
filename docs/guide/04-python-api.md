@@ -80,6 +80,7 @@ All 20 experiments used only the four allowed metals, and none exceeded 80 °C (
 | `seed` | 0 | Random seed |
 | `target_phase` | `None` | Framework phase to optimise for; `None` keeps the campaign's recorded target, else `pba_fm3m` |
 | `objectives` | `None` | Objectives to maximise (chapter 3); `None` keeps the recorded ones, else `("target_phase_fraction", "crystallinity")` |
+| `use_measurement_noise` | `False` | Give the surrogate each sample's `Objectives.uncertainty` as measurement noise (chapter 3, Planners) |
 | `use_descriptors` | `False` | Correlate metals and precursors in the surrogate by physical descriptors instead of as unrelated labels (chapter 3, Planners) |
 
 The CLI uses its own defaults for some of these (for example `--batch-size 8`).
@@ -111,11 +112,12 @@ campaign.dataframe()            # pandas DataFrame, one row per experiment
 
 exp = campaign.best_experiment()
 exp.parameters                  # SynthesisParameters (the recipe)
-exp.descriptors.xrd             # phase_fractions, phase_lattice, crystallinity_index, lattice_a_A, …
+exp.descriptors.xrd             # phase_fractions, phase_fraction_sd, phase_lattice, crystallinity_index, …
 exp.descriptors.composition     # a_site ({'Na': …, 'K': …}), vacancy_fraction, formula, …
 exp.descriptors.echem           # formal_potential_V, separation_factor ({'K/Zn': …}), retention, …
 exp.metadata.get("echem_skipped")   # reason, if an XRD gate skipped cycling
 exp.objectives.values           # {'target_phase_fraction': …, 'crystallinity': …}
+exp.objectives.uncertainty      # {'target_phase_fraction': sd}
 exp.objectives.feasible         # yield constraint satisfied?
 ```
 

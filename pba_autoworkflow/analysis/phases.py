@@ -68,6 +68,17 @@ MIN_INTENSITY_SHARE = 0.01
 #: intensity it has no claim to (at low crystallinity this inflated the R-3c
 #: fraction of a mixed Zn sample from 0.30 to 0.67).
 MIN_DOMAIN_NM = 5.0
+#: Coherence length (nm) of the short-range-ordered component of a cubic
+#: framework (disordered cubic ZnHCF after fast drying): the same reflections,
+#: broadened.  Fitted as a companion term of every cubic framework phase so
+#: that broad framework intensity is not absorbed by a low-symmetry phase.
+DIFFUSE_DOMAIN_NM = 2.0
+#: FWHM (deg 2-theta, at the cubic (200) position) above which two framework
+#: polymorphs are not resolved, and the uncertainty allowance then added to
+#: their weight fractions (x framework share).  Set from the simulated Zn
+#: benchmark (docs/guide/03-concepts.md, Phase identification).
+RESOLVE_FWHM_DEG = 0.6
+UNRESOLVED_SD = 0.2
 
 
 @dataclass(frozen=True)
@@ -258,6 +269,12 @@ def _pv_area_normalised(x: np.ndarray, centres: np.ndarray, fwhm: np.ndarray,
 #: overlapped by another kept phase) are observed as peaks.
 MIN_DISTINCTIVE_LINES = 2
 DISTINCT_SEP_DEG = 0.25
+#: Share of a framework phase's predicted distinctive-line intensity that must
+#: be found as observed peaks (see :func:`_line_evidence`).
+MIN_LINE_EVIDENCE = 0.4
+#: Lattice minima this close (fraction of the window) to the window edge are
+#: unbracketed: the phase matched nothing in particular and is not tried.
+EDGE_FRACTION = 0.95
 EXPLAINED_SHARE = 0.3
 #: Residual ratio (without / with) above which an overlapped phase is kept.
 OVERLAP_RSS_RATIO = 1.5
@@ -293,7 +310,72 @@ def _distinctive_matches(it, others) -> int:
     return max(n, MIN_DISTINCTIVE_LINES) if strongest and it["ref"].framework else n
 
 
-def _supported(kept: list, area: dict, rss=None) -> list:
+def _distinct_groups(it, others, wavelength_A, eta, tt):
+    """Groups of a phase's distinctive lines, each with its fit window.
+
+    Distinctive: >= 3 % of the phase's strongest line, and no line of another
+    kept phase with >= 10 % of its fitted intensity within DISTINCT_SEP_DEG.
+    Lines whose windows overlap are grouped and fitted together.
+    """
+    c1 = it.get("c1", 0.0)
+    pred_I = c1 * it["lI"]
+    rel = it["lI"] / it["lI"].max()
+    fwhm = np.hypot(INSTRUMENT_FWHM_DEG, _scherrer_fwhm(it["dom"], it["ltt"], wavelength_A))
+    keep = []
+    for k in np.nonzero(rel >= 0.03)[0]:
+        t = it["ltt"][k]
+        if any(np.any((np.abs(o["ltt"] - t) <= DISTINCT_SEP_DEG)
+                      & (o.get("c1", 0.0) * o["lI"] >= 0.1 * pred_I[k])) for o in others):
+            continue
+        keep.append(k)
+    groups = []
+    for k in sorted(keep, key=lambda k: it["ltt"][k]):
+        lo = it["ltt"][k] - max(2.0 * fwhm[k], 0.2)
+        hi = it["ltt"][k] + max(2.0 * fwhm[k], 0.2)
+        if groups and lo <= groups[-1][2]:
+            groups[-1][0].append(k); groups[-1][2] = max(groups[-1][2], hi)
+        else:
+            groups.append([[k], lo, hi])
+    return groups, fwhm, pred_I
+
+
+def line_evidence(it, others, tt, resid, wavelength_A, eta) -> tuple[float, int]:
+    """Share of a phase's predicted distinctive-line intensity found in the data.
+
+    ``resid`` is the pattern minus the fitted model of every *other* phase.
+    In each window around a group of the phase's distinctive lines the
+    residual is fitted with ``f * (predicted lines) + linear baseline``; the
+    evidence is the prediction-weighted mean of ``f`` clipped to [0, 1].  A
+    real phase leaves its narrow lines in the residual (f ~ 1); a phase fitted
+    at a spurious lattice to absorb broad intensity (a poorly ordered or
+    disordered cubic sample read as R-3c) leaves a smooth residual that the
+    baseline takes up (f ~ 0).  Independent of peak detection, so a minor
+    phase whose lines are not resolved as separate peaks is still seen.
+    Returns (evidence, number of distinctive lines).
+    """
+    if it.get("c1", 0.0) <= 0:
+        return 0.0, 0
+    groups, fwhm, pred_I = _distinct_groups(it, others, wavelength_A, eta, tt)
+    num = den = 0.0
+    n = 0
+    for ks, lo, hi in groups:
+        m = (tt >= lo) & (tt <= hi)
+        if m.sum() < 8:
+            continue
+        x = tt[m]
+        prof = _pv_area_normalised(x, it["ltt"][ks], fwhm[ks], eta) @ pred_I[ks]
+        if not np.any(prof > 0):
+            continue
+        A = np.column_stack([prof, np.ones_like(x), x - x.mean()])
+        sol, *_ = np.linalg.lstsq(A, resid[m], rcond=None)
+        P = float(pred_I[ks].sum())
+        num += float(np.clip(sol[0], 0.0, 1.0)) * P
+        den += P
+        n += len(ks)
+    return (num / den if den > 0 else 0.0), n
+
+
+def _supported(kept: list, area: dict, rss=None, evidence=None) -> list:
     """Drop phases whose intensity is not backed by reflections of their own.
 
     Without this, a low-symmetry phase whose many lines sit close to another
@@ -311,7 +393,16 @@ def _supported(kept: list, area: dict, rss=None) -> list:
             if it is kept[-1]:
                 continue
             others = [o for o in kept if o is not it]
-            if _distinctive_matches(it, others) >= MIN_DISTINCTIVE_LINES:
+            strongest_fw = max((o for o in kept if o["ref"].framework),
+                               key=lambda o: area[id(o)], default=None)
+            if (it["ref"].framework and evidence is not None and it is not strongest_fw
+                    and any(o["ref"].framework for o in others)):
+                # competing framework polymorphs: is the intensity this one
+                # predicts at its own distinctive lines actually in the pattern?
+                ev, n_dist = evidence(it, others)
+                if n_dist >= 1 and ev >= MIN_LINE_EVIDENCE:
+                    continue
+            elif _distinctive_matches(it, others) >= MIN_DISTINCTIVE_LINES:
                 continue
             # Fully overlapped phase: keep it only if the pattern cannot be
             # fitted nearly as well without it (e.g. a cubic + monoclinic
@@ -344,6 +435,8 @@ class PhaseResult:
     lines_tt: np.ndarray = field(repr=False)
     lines_I: np.ndarray = field(repr=False)
     matched: list = field(default_factory=list, repr=False)
+    #: standard uncertainty of ``weight_fraction`` (see :func:`quantify_phases`)
+    weight_fraction_sd: float = 0.0
 
 
 @dataclass
@@ -352,6 +445,11 @@ class QuantResult:
     unidentified_area: float
     unidentified_peaks: list = field(repr=False)
     model: np.ndarray = field(repr=False)
+    #: Bragg-position intensity of the broad (short-range-ordered) companion
+    #: terms of cubic framework phases; not part of any phase weight
+    diffuse_area: float = 0.0
+    #: uncertainty of candidate phases that were not kept (reported as 0 +/- sd)
+    absent_sd: dict = field(default_factory=dict)
 
     @property
     def bragg_total(self) -> float:
@@ -398,12 +496,26 @@ def quantify_phases(tt: np.ndarray, y: np.ndarray, peaks, wavelength_A: float,
     prepared = []
     for ref in candidates(metal):
         scale, mis = refine_lattice(ref, peaks, wavelength_A, rng)
-        it = build(ref, scale) if mis <= 0.85 else None
+        at_edge = ref.framework and max(abs(v - 1.0) for v in scale) > EDGE_FRACTION * ref.window
+        it = build(ref, scale) if mis <= 0.85 and not at_edge else None
         if it is not None:
             prepared.append(it)
 
+    use_diffuse = [False]       # off while screening which phases are present
+
+    def _has_companion(it):
+        return (use_diffuse[0] and it["ref"].framework and it["ref"].strain == "iso"
+                and it["dom"] >= 3.0 * DIFFUSE_DOMAIN_NM)
+
+    def diffuse_cols(items):
+        # A broad companion is only distinguishable from the phase's own lines
+        # when those are clearly narrower; for very small domains the two are
+        # degenerate and the companion would take the phase's intensity.
+        return [_column(tt, it["ltt"], it["lI"], DIFFUSE_DOMAIN_NM, eta, wavelength_A)
+                for it in items if _has_companion(it)]
+
     def solve(items, extra_peaks):
-        cols = [it["col"] for it in items]
+        cols = [it["col"] for it in items] + diffuse_cols(items)
         for p in extra_peaks:
             cols.append(_pv_area_normalised(tt, np.array([p.two_theta_deg]),
                                             np.array([max(p.fwhm_deg, 0.05)]), eta)[:, 0])
@@ -420,8 +532,20 @@ def quantify_phases(tt: np.ndarray, y: np.ndarray, peaks, wavelength_A: float,
     for it, c in zip(prepared, coef):
         it["c1"] = float(c)
     kept = [it for it, a in zip(prepared, areas) if total > 0 and a / total >= MIN_INTENSITY_SHARE]
+    use_diffuse[0] = True
+    def evidence(it, others):
+        coef_o, mdl_o = solve(others, [])
+        for o, c in zip(others, coef_o):
+            o["c1"] = float(c)
+        coef_a, _ = solve(others + [it], [])
+        it["c1"] = float(coef_a[len(others)])
+        r = line_evidence(it, others, tt, y - mdl_o, wavelength_A, eta)
+        it["ev"] = r[0]
+        return r
+
     kept = _supported(kept, dict(zip((id(it) for it in prepared), areas)),
-                      rss=lambda items: float(np.sum((y - solve(items, [])[1]) ** 2)))
+                      rss=lambda items: float(np.sum((y - solve(items, [])[1]) ** 2)),
+                      evidence=evidence)
 
     # Profile width per phase: coordinate descent on the NNLS residual over a
     # few domain sizes around the Scherrer estimate from the matched peaks.
@@ -448,8 +572,82 @@ def quantify_phases(tt: np.ndarray, y: np.ndarray, peaks, wavelength_A: float,
     unexplained = [p for p in peaks
                    if lines_all.size == 0 or np.min(np.abs(lines_all - p.two_theta_deg)) > UNEXPLAINED_TOL_DEG]
 
+    def fractions(items, extra):
+        c, _ = solve(items, extra)
+        raw = {it["ref"].phase_id: c[k] * it["ref"].cell_mass_amu * it["ref"].volume(it["scale"])
+               for k, it in enumerate(items)}
+        tot = sum(raw.values())
+        return {k: (v / tot if tot > 0 else 0.0) for k, v in raw.items()}
+
     coef, model = solve(kept, unexplained)
     n_ph = len(kept)
+    w_now = fractions(kept, unexplained)
+    fw_ids = sorted({r.phase_id for r in candidates(metal) if r.framework}) if metal else []
+    var = {k: 0.0 for k in set(w_now) | set(fw_ids)}
+
+    # (1) counting/fit noise: linearised covariance of the NNLS scales,
+    # propagated to Hill-Howard weight fractions.  The residual variance
+    # includes systematic misfit, so this is conservative for the noise and
+    # says nothing about the choice of phases.
+    cols = [it["col"] for it in kept]
+    if cols and n_ph:
+        A = np.column_stack(cols + diffuse_cols(kept))
+        act = np.nonzero(coef[:A.shape[1]] > 0)[0]
+        dof = tt.size - len(coef)
+        if act.size and dof > 0:
+            s2 = float(np.sum((y - model) ** 2)) / dof
+            try:
+                cov = s2 * np.linalg.inv(A[:, act].T @ A[:, act])
+            except np.linalg.LinAlgError:
+                cov = None
+            if cov is not None:
+                k_ = np.array([it["ref"].cell_mass_amu * it["ref"].volume(it["scale"]) for it in kept])
+                c_ = coef[:n_ph] * k_
+                tot = c_.sum()
+                if tot > 0:
+                    for i, it in enumerate(kept):
+                        # d w_i / d coef_j for the active phase scales
+                        g = np.zeros(act.size)
+                        for a_i, j in enumerate(act):
+                            if j < n_ph:
+                                g[a_i] = k_[j] * ((1.0 if j == i else 0.0) * tot - c_[i]) / tot ** 2
+                        var[it["ref"].phase_id] += float(g @ cov @ g)
+
+    # (2) decision ambiguity: a framework phase whose line evidence is within
+    # a factor of two of the threshold could as well have gone the other way.
+    kept_ids = {id(it) for it in kept}
+    for it in prepared:
+        ev = it.get("ev")
+        if not it["ref"].framework or ev is None or ev <= 0:
+            continue
+        closeness = 1.0 - abs(math.log(ev / MIN_LINE_EVIDENCE)) / math.log(2.0)
+        if closeness <= 0:
+            continue
+        pr = 0.5 * closeness                    # probability of the other decision
+        alt = ([o for o in kept if o is not it] if id(it) in kept_ids else kept + [it])
+        if not alt:
+            continue
+        w_alt = fractions(alt, unexplained)
+        for k in set(w_now) | set(w_alt):
+            dw = w_alt.get(k, 0.0) - w_now.get(k, 0.0)
+            var[k] = var.get(k, 0.0) + pr * (1.0 - pr) * dw * dw
+
+    # (3) resolvability: when the framework lines are broader than the
+    # splitting that tells two framework polymorphs apart, their split is not
+    # determined by the pattern (calibrated on the simulator, see
+    # RESOLVE_FWHM_DEG and UNRESOLVED_SD).
+    fw_kept = [it for it in kept if it["ref"].framework]
+    n_fw_cand = sum(1 for r in candidates(metal) if r.framework) if metal else 0
+    if fw_kept and n_fw_cand > 1:
+        dom = min(it["dom"] for it in fw_kept)
+        fwhm = float(np.hypot(INSTRUMENT_FWHM_DEG, _scherrer_fwhm(dom, np.array([17.3]), wavelength_A)[0]))
+        if fwhm > RESOLVE_FWHM_DEG:
+            fw_share = sum(w_now.get(it["ref"].phase_id, 0.0) for it in fw_kept)
+            for k in fw_ids:                     # absent polymorphs too: 0 +/- sd
+                var[k] = var.get(k, 0.0) + (UNRESOLVED_SD * fw_share) ** 2
+    n_dif = len(diffuse_cols(kept))
+    iso_fw = [it for it in kept if _has_companion(it)]
+    diffuse_area = float(sum(c * it["lI"].sum() for c, it in zip(coef[n_ph:n_ph + n_dif], iso_fw)))
     results = []
     raw_w = []
     for c, it in zip(coef[:n_ph], kept):
@@ -469,8 +667,12 @@ def quantify_phases(tt: np.ndarray, y: np.ndarray, peaks, wavelength_A: float,
             weight_fraction=float(rw / wsum) if wsum > 0 else 0.0,
             n_matched=len(it["matched"]), rms_deg=rms, lines_tt=it["ltt"], lines_I=it["lI"] * c,
             matched=it["matched"],
+            weight_fraction_sd=float(math.sqrt(var.get(ref.phase_id, 0.0))),
         ))
     results.sort(key=lambda r: -r.weight_fraction)
-    unid_area = float(sum(c for c in coef[n_ph:]))
+    unid_area = float(sum(c for c in coef[n_ph + n_dif:]))
+    present = {r.phase_id for r in results}
+    absent_sd = {k: float(math.sqrt(v)) for k, v in var.items() if k not in present and v > 0}
     return QuantResult(phases=results, unidentified_area=unid_area,
-                       unidentified_peaks=unexplained, model=model)
+                       unidentified_peaks=unexplained, model=model, diffuse_area=diffuse_area,
+                       absent_sd=absent_sd)

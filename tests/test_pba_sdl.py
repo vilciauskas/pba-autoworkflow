@@ -1034,10 +1034,11 @@ def test_phase_library_is_consistent():
 @pytest.mark.parametrize("over", [dict(), dict(dry_temperature_C=110.0, dry_pressure_mbar=8.0),
                                   dict(temperature_C=60.0, addition_rate_mL_min=0.5, aging_time_h=6.0)])
 def test_zn_polymorph_fractions_recovered(over):
-    """Weight fractions of the two Zn polymorphs, for a well-ordered framework.
+    """Weight fractions of the two Zn polymorphs at an ordered fraction of 0.7.
 
-    Below an ordered fraction of ~0.5 the R-3c share reads systematically high
-    (see ``test_zn_low_order_bias_is_bounded``), so this sets order = 0.7.
+    The analysis must be accurate (within 0.08) or say it is not: where the
+    lines are too broad to separate the polymorphs (the 110 degC / 8 mbar case
+    has 8 nm domains) the error must lie within twice the reported sd.
     """
     gt = GroundTruth(seed=1, reproducibility=0.0, failure_rate=0.0)
     lat = gt.latent(_zn(**over), np.random.default_rng(3))
@@ -1045,8 +1046,11 @@ def test_zn_polymorph_fractions_recovered(over):
     desc = analyze_pattern(simulate_xrd(lat, np.random.default_rng(4)), "Zn")
     truth = lat.xrd_weight_fractions()
     for phase in ("znhcf_r3c", "pba_fm3m"):
-        assert desc.phase_fractions.get(phase, 0.0) == pytest.approx(truth.get(phase, 0.0), abs=0.08), \
-            (phase, truth, desc.phase_fractions)
+        err = abs(desc.phase_fractions.get(phase, 0.0) - truth.get(phase, 0.0))
+        sd = desc.phase_fraction_sd[phase]
+        assert err <= max(0.08, 2.0 * sd), (phase, truth, desc.phase_fractions, desc.phase_fraction_sd)
+        if sd < 0.1:
+            assert err <= 0.08, (phase, err, sd)
 
 
 #: The five drying routes of Pilipavicius et al. (zinc hexacyanoferrate from
@@ -1260,10 +1264,12 @@ def test_target_phase_is_validated_and_recorded(tmp_path):
 
 
 def test_zn_low_order_bias_is_bounded():
-    """Known limitation, pinned so a change in either direction is noticed.
+    """R-3c-rich Zn sample (true R-3c ~0.98) at decreasing order.
 
-    In a poorly ordered cubic + R-3c Zn mixture the many weak R-3c lines absorb
-    intensity the cubic phase should get; the R-3c fraction reads high.
+    The R-3c share used to read up to +0.30 high at order 0.35, the many weak
+    R-3c lines absorbing intensity the cubic phase should get.  Now pinned at
+    |bias| < 0.05 at every order, and inside the reported uncertainty.
+    Mixtures are covered in tests/test_xrd_polymorph.py.
     """
     import copy
     gt = GroundTruth(seed=1, reproducibility=0.0, failure_rate=0.0)
@@ -1273,11 +1279,10 @@ def test_zn_low_order_bias_is_bounded():
     for order in (0.35, 0.7):
         lat = copy.deepcopy(base); lat.crystallinity = order
         truth = lat.xrd_weight_fractions()["znhcf_r3c"]
-        bias[order] = float(np.median([
-            analyze_pattern(simulate_xrd(lat, np.random.default_rng(10 + k)), "Zn")
-            .phase_fractions.get("znhcf_r3c", 0.0) - truth for k in range(4)]))
-    assert abs(bias[0.7]) < 0.08, bias
-    assert bias[0.35] < 0.30, bias
+        xs = [analyze_pattern(simulate_xrd(lat, np.random.default_rng(10 + k)), "Zn") for k in range(4)]
+        bias[order] = float(np.median([x.phase_fractions.get("znhcf_r3c", 0.0) - truth for x in xs]))
+        assert abs(bias[order]) <= 2 * min(x.phase_fraction_sd["znhcf_r3c"] for x in xs), (order, bias)
+    assert all(abs(b) < 0.05 for b in bias.values()), bias
 
 
 def test_sodium_route_zinc_framework_keeps_its_sodium():

@@ -593,6 +593,10 @@ class XRDDescriptors(BaseModel):
     #: weight fraction of each identified crystalline phase (Hill-Howard, from
     #: whole-pattern scale factors); sums to 1 over the crystalline material
     phase_fractions: dict[str, float] = Field(default_factory=dict)
+    #: standard uncertainty of each weight fraction: fit noise, near-threshold
+    #: phase decisions, and an allowance when framework polymorphs are not
+    #: resolved (broad lines).  Empty for records written before it existed.
+    phase_fraction_sd: dict[str, float] = Field(default_factory=dict)
     #: refined lattice (a, b, c, alpha, beta, gamma) of each identified phase
     phase_lattice: dict[str, list[float]] = Field(default_factory=dict)
     #: share of the Bragg intensity in peaks no library phase explains
@@ -787,7 +791,7 @@ class SampleDescriptors(BaseModel):
                 continue
             for k, v in block.model_dump().items():
                 if isinstance(v, dict):          # e.g. phase_fractions -> xrd_w_<phase>
-                    tag = {"phase_fractions": "w", "phase_lattice": "lat"}.get(k, k)
+                    tag = {"phase_fractions": "w", "phase_fraction_sd": "wsd", "phase_lattice": "lat"}.get(k, k)
                     for kk, vv in v.items():
                         kk = str(kk).replace("/", "_")
                         out[f"{prefix}_{tag}_{kk}"] = (",".join(f"{x:.4f}" for x in vv)
@@ -817,6 +821,9 @@ class Objectives(BaseModel):
     values: dict[str, float]
     constraints: dict[str, float] = Field(default_factory=dict)
     feasible: bool = True
+    #: standard uncertainty of each value where the analysis provides one
+    #: (target_phase_fraction); passed to the surrogate as measurement noise
+    uncertainty: dict[str, float] = Field(default_factory=dict)
 
     def vector(self, names: Sequence[str]) -> np.ndarray:
         return np.asarray([self.values[n] for n in names], dtype=float)

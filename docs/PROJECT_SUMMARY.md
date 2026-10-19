@@ -11,7 +11,7 @@ the same numbers are in [key_results.json](key_results.json) in machine-readable
 ## 1. Summary
 
 1. **An orchestrator for an autonomous PBA lab was built and tested** (`pba_autoworkflow`, 39 source
-   files, 10,148 lines; 7 test files, 2,575 lines; 156 tests passing, plus 4 slow force-field tests
+   files, 10,430 lines; 8 test files, 2,715 lines; 166 tests passing, plus 4 slow force-field tests
    run separately). It runs
    the full loop: plan → schedule on shared instruments → execute → analyse raw instrument
    traces → update a multi-objective surrogate → plan again. It also keeps a provenance store,
@@ -80,7 +80,16 @@ of being silently corrected.
   salt choice and pH limits, and the assay route (ICP, or charge passed for the framework metal
   and NH₄⁺) all follow from the ion table. The simulator's potentials for ions other than Na⁺,
   K⁺ and Zn²⁺ are set by rule and are illustrative only.
-- **Two options were benchmarked and left off by default.**
+- **Zinc polymorph quantification without the R-3c over-reporting.** A line-evidence test decides
+  between competing framework polymorphs, and a broad companion term absorbs disordered cubic
+  scattering. On 1,000 simulated cubic/R-3c mixtures the mean R-3c error fell from 0.098 to
+  0.058 (0.090 → 0.041 at domains ≥ 16 nm). Minor cubic next to R-3c is now found: 46 rather than
+  177 of 200 missed. The paper's fast-drying routes read 0.00 R-3c instead of 0.21–0.27. Every
+  weight fraction now carries an uncertainty that covered 99 % of errors; where the polymorphs are
+  not resolved (domains ≲ 12 nm) it is large (≈ 0.2–0.3) rather than the value being trusted.
+- **Three options were benchmarked and left off by default.**
+  - *XRD uncertainty as surrogate noise.* In 10 paired R-3c campaigns the true R-3c fraction of
+    the reported best was 0.961 with it and 0.969 without (p = 0.61).
   - *Physical descriptors for metals in the surrogate.* With one metal held out, they halved its
     prediction error (RMSE 2.07 → 1.08). In 8 paired simulated campaigns the final hypervolume was
     0.804 against 0.792, within seed-to-seed scatter.

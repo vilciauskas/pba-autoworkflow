@@ -109,16 +109,56 @@ but its intensities omit the Na⁺ of the Fe(II) compound the platform makes.
 2. Synthesise its pattern from |F|² × Lorentz-polarisation with a pseudo-Voigt profile whose width
    follows its own domain size.
 3. Fit the background-stripped pattern as a non-negative sum of all phase patterns, plus a free
-   peak for every line no phase explains.
+   peak for every line no phase explains. Each cubic framework phase also gets a **broad companion
+   term**: the same reflections at a 2 nm coherence length. It represents short-range-ordered
+   (disordered cubic) framework and keeps that broad intensity from being absorbed by a
+   low-symmetry phase. It is not counted in any weight fraction. Counting it as part of the
+   cubic phase made every phase less accurate, because in ordered frameworks it also takes up
+   line-shape mismatch.
 4. Convert the scale factors to **weight fractions** with the Hill–Howard relation,
    *w*ₚ ∝ *S*ₚ (*ZMV*)ₚ.
 
-A phase is kept only if the pattern needs it. Either at least two of its strong lines are observed
-where no other phase can explain them, or, for a framework phase, its own strongest line is (a minor
-cubic Zn phase next to R-3c has only its (200) line clear of the dense R-3c pattern), or the
-whole-pattern fit becomes clearly worse without it.
-Without this test, a low-symmetry phase whose many lines lie close to cubic reflections absorbs
-intensity mismatch and is reported although it isn't there.
+A phase is kept only if the pattern needs it.
+
+- **Competing framework polymorphs** (cubic vs R-3c for Zn, cubic vs P2₁/n for Mn and Fe) are
+  judged by **line evidence**. Take the pattern minus every other phase. Around each of the
+  phase's *distinctive* lines (lines no other kept phase has nearby), fit that residual as
+  *f* × (the predicted lines) + a linear baseline. The evidence is the prediction-weighted mean of
+  *f*, clipped to 0–1. A real phase leaves its narrow lines in the residual (*f* ≈ 1). A phase
+  fitted only to soak up broad intensity leaves a smooth residual that the baseline takes
+  (*f* ≈ 0). A phase with evidence below 0.4 is dropped, except the strongest framework phase,
+  which is never removed this way. The test does not depend on peak detection, so a minor cubic
+  phase whose lines sit inside the R-3c pattern is still found.
+- **Other phases** need at least two strong lines that no other phase can explain, or the
+  whole-pattern fit must become clearly worse without them.
+
+A framework cell whose best lattice lies at the edge of its allowed window is not tried at all.
+
+Without these tests, a low-symmetry phase whose many lines lie close to cubic reflections absorbs
+intensity and is reported although it isn't there. That was the cause of the R-3c over-reporting
+in poorly ordered and disordered cubic zinc samples, before this test was added.
+
+**Uncertainty of the weight fractions** (`phase_fraction_sd`). Each weight fraction carries a
+standard uncertainty with three parts:
+
+1. **Fit noise:** the linearised covariance of the scale factors, propagated through Hill–Howard.
+   This part is small (≤ 0.01).
+2. **Decision ambiguity:** for a framework phase whose line evidence is within a factor of two of
+   the threshold, the change in every fraction if the decision had gone the other way, weighted
+   by how close the call was.
+3. **Polymorph split** (only for metals with two framework polymorphs: Zn, Mn, Fe):
+   - an error model against the measured crystallinity index, from the simulated Zn benchmark
+     (sd 0.045 at crystallinity ≥ 0.7, 0.08 at 0.35, 0.36 at 0.15);
+   - plus 0.2 × the framework share when the lines are broader than 0.6° 2θ (domains below about
+     13 nm). Lines that broad cover the splittings that tell the polymorphs apart, so the split is
+     essentially undetermined by the pattern.
+
+Absent candidates are reported too: for example R-3c 0 ± 0.08 in a cubic zinc sample.
+`target_phase_fraction` passes its uncertainty on in `Objectives.uncertainty`. Part 3 is
+calibrated on simulated patterns; recalibrate it on reference mixtures of known composition
+before relying on it. On fresh simulated seeds, 99 % of R-3c errors fell within 2 sd. The
+estimate is therefore conservative: on the paper's drying routes it gives 0.21–0.31 against
+actual errors of 0.00–0.08.
 
 Descriptors from this step:
 
@@ -138,17 +178,33 @@ both drying gases; median and 90th-percentile absolute error of the weight fract
 
 | Phase | Median | 90th percentile |
 |---|---|---|
-| cubic Fm-3m | 0.008 | 0.052 |
-| rhombohedral R-3c (Zn) | 0.061 | 0.152 |
-| NaCl | 0.015 | 0.049 |
-| M(OH)₂, CuO, ZnO | 0.02–0.03 | 0.05–0.10 |
+| cubic Fm-3m | 0.008 | 0.039 |
+| rhombohedral R-3c (Zn) | 0.029 | 0.089 |
+| NaCl | 0.020 | 0.050 |
+| M(OH)₂, CuO, ZnO | 0.014–0.026 | 0.039–0.050 |
 | monoclinic P2₁/n (Mn, Fe) | 0.095 | 0.447 |
+
+Before the line-evidence test and the companion term, the same check gave R-3c 0.061 / 0.152,
+cubic 0.008 / 0.052, and M(OH)₂, CuO and ZnO 0.02–0.03 / 0.05–0.10. NaCl was 0.015 / 0.049, so
+NaCl is slightly worse now. Two cubic samples with a true ordered fraction of 0.20 are now called
+amorphous, at the crystallinity cut-off.
 
 The P2₁/n row is from an earlier run of the same check with more Na-rich Mn/Fe samples. Only two
 samples in this population contain it, because Na-rich recipes now share the A sites with K⁺. The
-R-3c error is larger than in that earlier run (0.024 median): with drying now applied, most
-random zinc recipes dry fast and give a poorly ordered disordered-cubic framework, where R-3c is
-over-reported (see the limitations below).
+R-3c error is now close to that earlier run (0.024 median).
+
+**Zinc polymorph benchmark** (`scripts/zn_xrd_benchmark.py`; 1,000 controlled cubic/R-3c mixtures, true
+R-3c share 0–1, ordered fraction 0.25–0.9, ordered or disordered cubic, domains 8–25 nm, no
+secondary phases; fresh noise seeds):
+
+| | Before | Now |
+|---|---|---|
+| Mean R-3c error, all | 0.098 | 0.058 |
+| Mean / 90th percentile, domains ≥ 16 nm | 0.090 / 0.250 | 0.041 / 0.089 |
+| Mean / 90th percentile, crystallinity ≥ 0.5 | 0.061 / 0.178 | 0.037 / 0.069 |
+| Minor cubic (0.25) next to R-3c missed | 177 / 200 | 46 / 200 |
+| Pure cubic read as > 0.05 R-3c | 42 / 200 | 18 / 200 |
+| Paper's fast-drying routes (true R-3c 0.03–0.06) | 0.21, 0.27 | 0.00, 0.00 |
 
 The cubic lattice constant is recovered to 0.0001 Å (median). For R-3c-dominant zinc samples the
 median error is 0.006 Å in *a* (12.47–12.61 Å, hydrated to anhydrous) and 0.06 Å in *c* (32.9 Å).
@@ -159,19 +215,23 @@ median error is 0.006 Å in *a* (12.47–12.61 Å, hydrated to anhydrous) and 0.
   the monoclinic fraction for mixed samples). The monoclinic doublets are 0.1–0.2° apart and
   merge with the cubic line. Pure samples of either phase are identified correctly. Separating
   mixtures needs a full Rietveld refinement.
-- **Poorly ordered Zn mixtures over-report R-3c.** At an ordered fraction of 0.7 the bias is
-  +0.04; at 0.5 it is +0.06 to +0.13; at 0.35 or below it is +0.17 to +0.36. The many weak R-3c
-  lines take up intensity the cubic phase should get. The crystallinity objective works against
-  this in the Pareto front, but a campaign targeting R-3c should check its best low-crystallinity
-  results by hand.
-- **Disordered cubic ZnHCF reads as partly R-3c.** For the paper's fast-drying routes (true R-3c
-  0.03–0.05) the analysis reports 0.21–0.24 R-3c, the same low-order bias as above.
+- **Small domains (≲ 12 nm) or low crystallinity (≲ 0.3): the zinc polymorph split is not
+  determined.** At 8 nm the lines are about 1° wide, wider than the R-3c splittings. The R-3c
+  lattice then cannot be refined from peak positions, and a minor phase of either kind is
+  missed or over-read: the 90th-percentile error is still 0.25. The analysis reports this
+  through a large `phase_fraction_sd` (≈ 0.2–0.3) rather than a better number.
+- **Minor R-3c is occasionally reported in pure cubic** (18/200, typically 0.07–0.10), with an
+  sd of about 0.2 that covers it.
+- **Line-evidence threshold:** 0.4 was chosen between false R-3c and missed minor R-3c. Its
+  calibration is noisy: the same code on different noise seeds gave a mean error at ≥ 16 nm of
+  0.037–0.053.
 - **Diffuse scattering is detected only partly.** A rapidly dehydrated framework scatters partly
   diffusely (reflections broadened to a ~2 nm coherence length). The analysis fits such a term to
   the raw pattern minus the Bragg model and counts it as ordered, not amorphous, scattering
-  (`diffuse_fraction`). On simulated disordered-cubic Zn samples with a true diffuse share of 0.14,
-  it found 0.04–0.08 (median) and nothing in about half the samples. It reported none for ordered
-  frameworks. It is applied only to cubic frameworks: against the dense R-3c line list it gave
+  (`diffuse_fraction`). On the paper's two fast-drying routes (true diffuse share 0.14) it now
+  reports 0.00 and about 0.06; it reported none for ordered frameworks. The broad companion term
+  in the quantification would measure 0.11–0.16 on those routes, but it also takes 0.17 on an
+  ordered Mn framework, so it is not used as the diffuse share. It is applied only to cubic frameworks: against the dense R-3c line list it gave
   false positives.
 - **Unknown phases** appear only as `unidentified_fraction`. Their weight cannot be estimated
   without a structure, so the target-phase objective is discounted by their intensity share instead.
@@ -367,6 +427,15 @@ information is shared between metals without assuming which are alike. Hyperpara
 marginal likelihood. Candidates come from global Sobol' coverage plus local perturbations of the
 current front. A batch is selected greedily with the *kriging believer* heuristic. Until at least
 8 usable results exist, the planner continues with Sobol' points (logged as `sobol-warmup`).
+
+**Measurement noise (optional).** With `CampaignConfig(use_measurement_noise=True)` or
+`--measurement-noise`, each sample's `Objectives.uncertainty` is added to the GP's diagonal on top
+of the learned noise. Uncertain observations then pull the surrogate less. In 10 paired
+R-3c-targeted campaigns on the simulator (12 seed runs + 5 batches of 8), it made no measurable
+difference. Scored by the *true* R-3c fraction of the recipe each campaign reported as best:
+0.961 with it, 0.969 without (paired t-test p = 0.61). Both arms already find near-pure R-3c on
+the simulator, so the test has little room to show a benefit. The option is off by default; it
+should matter more on real data with many poorly crystalline samples.
 
 **Physical descriptors for metals (optional).** With `CampaignConfig(use_descriptors=True)` or
 `--descriptors`, the metal and precursor are no longer unrelated labels. The correlation between
